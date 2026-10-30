@@ -1267,6 +1267,8 @@ async def _validate_order_stock(order: dict):
     ).to_list(len(product_ids)) if product_ids else []
     products_by_id = {product["id"]: product for product in products}
     for item in items:
+        if not item.get("product_id"):
+            raise HTTPException(400, "Selecione um produto para todos os itens do pedido")
         quantity = float(item.get("qty", 1))
         if quantity <= 0:
             raise HTTPException(400, "A quantidade dos itens deve ser maior que zero")
@@ -1520,6 +1522,8 @@ async def get_order(oid: str, user: dict = Depends(get_current_user)):
 
 @api.post("/orders")
 async def create_order(payload: dict, user: dict = Depends(get_current_user)):
+    if payload.get("items") or payload.get("returned_items"):
+        await _validate_order_stock(payload)
     payload["number"] = await _next_order_number()
     if not payload.get("vendor_id"):
         payload["vendor_id"] = user["id"]
@@ -1569,6 +1573,8 @@ async def _update_order(oid: str, payload: dict, user: dict, allow_fulfillment: 
     discount = float(payload.get("discount", old.get("discount", 0)))
     payload["total"] = max(0, subtotal - discount)
     candidate = {**old, **payload}
+    if "items" in payload or "returned_items" in payload:
+        await _validate_order_stock(candidate)
     stock_fields_changed_before_update = (
         _stock_relevant_order_fields(old) != _stock_relevant_order_fields(candidate)
     )

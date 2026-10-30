@@ -8,6 +8,7 @@ import ProductSearchSelect from "@/components/ProductSearchSelect";
 import useSubmitLock from "@/hooks/useSubmitLock";
 import { useAuth } from "@/contexts/AuthContext";
 import { getStockHistoryRows } from "@/lib/stockHistory";
+import { sortBySku } from "@/lib/utils";
 
 const KIND_STYLE = {
   ENTRADA: "bg-green-100 text-green-800", SAIDA: "bg-red-100 text-red-800", AVARIA: "bg-red-200 text-red-900",
@@ -30,13 +31,14 @@ const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (character
 
 const openPrint = (title, rows) => {
   const w = window.open("", "_blank");
+  if (!w) return toast.error("Permita pop-ups para imprimir");
   w.document.write(`<html><head><title>${title}</title><style>
     body{font-family:Arial,sans-serif;padding:20px}h1{font-size:18px;margin:0 0 4px;color:#4B5320}
     table{width:100%;border-collapse:collapse;margin-top:10px}th{background:#111;color:#D9C9A0;text-align:left}
     th,td{border:1px solid #444;padding:4px 6px;font-size:11px}</style></head><body>
     <h1>LOKAL MILITAR — ${title}</h1><div style="font-size:11px">Emitido em ${new Date().toLocaleString("pt-BR")}</div>
     <table><thead><tr><th>SKU</th><th>Produto</th><th>Categoria</th><th>Tamanho</th><th>Quantidade</th></tr></thead>
-    <tbody>${rows.map((r) => `<tr><td>${r.sku || ""}</td><td>${r.name}</td><td>${r.cat}</td><td>${r.size}</td><td>${r.stock}</td></tr>`).join("")}</tbody></table>
+    <tbody>${sortBySku(rows).map((r) => `<tr><td>${r.sku || ""}</td><td>${r.name}</td><td>${r.cat}</td><td>${r.size}</td><td>${r.stock}</td></tr>`).join("")}</tbody></table>
     <script>window.onload=()=>window.print()</script></body></html>`);
   w.document.close();
 };
@@ -124,7 +126,7 @@ export default function Stock() {
   const printReconciliationSheet = () => {
     const printWindow = window.open("", "_blank");
     if (!printWindow) return toast.error("Permita pop-ups para imprimir a conferência");
-    const tableRows = allRows.map((row) => `
+    const tableRows = sortBySku(allRows).map((row) => `
       <tr>
         <td>${escapeHtml(row.name)}</td>
         <td>${escapeHtml(row.size)}</td>

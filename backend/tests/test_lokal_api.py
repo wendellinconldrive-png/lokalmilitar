@@ -239,6 +239,23 @@ class TestStock:
 
 # --- Orders / commission / desmontagem / trocas ---
 class TestOrders:
+    def test_order_rejects_item_without_product(self, admin):
+        response = admin.post(
+            f"{BASE_URL}/api/orders",
+            json={
+                "customer_name": "TEST_Item_sem_produto",
+                "items": [{
+                    "product_id": "",
+                    "name": "",
+                    "size": "",
+                    "qty": 1,
+                    "unit_price": 0,
+                }],
+            },
+        )
+        assert response.status_code == 400
+        assert "produto" in response.json()["detail"].lower()
+
     def test_novo_pedido_inicia_separado_sem_alterar_estoque(self, admin):
         product = _prod(admin, "TEST_Status_Separado", [{"size": "U", "stock": 4}])
         response = admin.post(

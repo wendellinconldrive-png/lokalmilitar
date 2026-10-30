@@ -1,6 +1,7 @@
 import React from "react";
 import { formatBRL, formatDateShort } from "@/lib/api";
 import BrandMark from "@/components/BrandMark";
+import { sortBySku } from "@/lib/utils";
 
 const C = { olive: "#4B5320", ink: "#111", khaki: "#C3B091", gold: "#B8860B", line: "#D9D2C3", soft: "#F6F3EC" };
 const TYPE_LABEL = { VENDA: "Pedido de venda", TROCA: "Troca", DEVOLUCAO: "Devolução", ORCAMENTO: "Orçamento" };
@@ -84,7 +85,7 @@ function ReturnsSection({ returned, exchanged }) {
 
 export default function PrintOrderA4({ order, settings, customer, vendor, captureRef }) {
   if (!order) return null;
-  const items = order.items || [];
+  const items = sortBySku(order.items || []);
   const returned = order.returned_items || [];
   const exchanged = order.exchanged_items || [];
   const somaQtd = items.reduce((s, i) => s + Number(i.qty || 0), 0);
@@ -187,6 +188,7 @@ export function PrintOrder80mm({ order, settings }) {
   const dash = <div style={{ borderTop: "1px dashed #000", margin: "4px 0" }} />;
   const returned = order.returned_items || [];
   const exchanged = order.exchanged_items || [];
+  const items = sortBySku(order.items || []);
   return (
     <div className="print-80">
       <div style={{ textAlign: "center", fontWeight: 700, fontSize: 13 }}>LOKAL MILITAR</div>
@@ -197,7 +199,7 @@ export function PrintOrder80mm({ order, settings }) {
       <div>Cliente: {order.customer_name || "-"}</div>
       <div>Vendedor: {order.vendor_name || "-"}</div>
       {dash}
-      {(order.items || []).map((it, i) => (
+      {items.map((it, i) => (
         <div key={i} style={{ marginBottom: 2 }}>
           <div>{it.name} {it.size ? `T:${it.size}` : ""}</div>
           <div style={{ display: "flex", justifyContent: "space-between" }}><span>{it.qty} x {num(it.unit_price)}</span><span>{num(it.subtotal || it.qty * it.unit_price)}</span></div>

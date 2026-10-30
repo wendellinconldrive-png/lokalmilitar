@@ -235,8 +235,21 @@ export default function Orders({ mode }) {
     try {
       if (!editing.customer_name && !editing.customer_id) return toast.error("Informe o cliente");
       if (editing.items.length === 0 && editing.type==="VENDA") return toast.error("Adicione ao menos 1 item");
+      const emptyProductIndex = editing.items.findIndex((item) => !item.product_id);
+      if (emptyProductIndex !== -1) {
+        return toast.error(`Selecione um produto ou remova o item ${emptyProductIndex + 1}`);
+      }
+      const invalidItemSize = editing.items.some((item) => {
+        const sizes = prodById[item.product_id]?.sizes || [];
+        return sizes.length > 0 && !sizes.some((size) => size.size === item.size);
+      });
+      if (invalidItemSize) return toast.error("Selecione um tamanho cadastrado para todos os produtos");
       if (editing.type !== "VENDA" && !editing.avulsa && !editing.original_order_id)
         return toast.error("Vincule a um pedido ou marque Avulsa");
+      const emptyReturnIndex = (editing.returned_items || []).findIndex((item) => !item.product_id);
+      if (emptyReturnIndex !== -1) {
+        return toast.error(`Selecione um produto ou remova o item devolvido ${emptyReturnIndex + 1}`);
+      }
       const invalidReturnSize = (editing.returned_items || []).some((item) => {
         if (!item.product_id) return false;
         const sizes = prodById[item.product_id]?.sizes || [];
@@ -888,7 +901,7 @@ export default function Orders({ mode }) {
                       <input className="input" type="number" min="0" step="0.01" value={it.unit_price} onChange={e=>setItem(i,{unit_price:Number(e.target.value)})} aria-label={`Valor unitário do item ${i + 1} em reais`}/>
                     </label>
                     <div className="col-span-2 sm:col-span-2 text-xs text-right" aria-label={`Subtotal do item ${i + 1}`}>Subtotal: {formatBRL(it.qty*it.unit_price)}</div>
-                    <button type="button" className="col-span-2 sm:col-span-1 text-red-700" onClick={()=>setEditing({...editing, items:editing.items.filter((_,x)=>x!==i)})} aria-label={`Remover item ${i + 1}`}>×</button>
+                    <button type="button" className="col-span-2 sm:col-span-1 text-red-700" onClick={()=>setEditing(current=>({...current, items:current.items.filter((_,x)=>x!==i)}))} aria-label={`Remover item ${i + 1}`} title="Remover este produto" data-testid={`remove-order-item-${i}`}><Trash2 size={14}/></button>
                       {(() => {
                         const info = dismantlingInfo(it, i);
                         if (!info) return null;
@@ -944,7 +957,8 @@ export default function Orders({ mode }) {
                         ))}
                       </select>
                       <input className="input col-span-1 sm:col-span-1" type="number" value={r.qty} onChange={e=>{const ri=[...editing.returned_items]; ri[i].qty=Number(e.target.value); setEditing({...editing, returned_items:ri});}}/>
-                      <input className="input col-span-2 sm:col-span-4" placeholder="Motivo (ex: tamanho errado)" value={r.reason||""} onChange={e=>{const ri=[...editing.returned_items]; ri[i].reason=e.target.value; setEditing({...editing, returned_items:ri});}}/>
+                      <input className="input col-span-2 sm:col-span-3" placeholder="Motivo (ex: tamanho errado)" value={r.reason||""} onChange={e=>{const ri=[...editing.returned_items]; ri[i].reason=e.target.value; setEditing({...editing, returned_items:ri});}}/>
+                      <button type="button" className="col-span-1 text-red-700" onClick={()=>setEditing(current=>({...current, returned_items:current.returned_items.filter((_,x)=>x!==i)}))} aria-label={`Remover item devolvido ${i + 1}`} title="Remover este produto" data-testid={`remove-returned-item-${i}`}><Trash2 size={14}/></button>
                     </div>
                   ))}
                 </div>
