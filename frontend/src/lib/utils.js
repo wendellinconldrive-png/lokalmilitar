@@ -25,3 +25,9 @@ export function groupRowsByProduct(rows) {
   });
   return [...groups.values()];
 }
+
+export function stockRowHighlightClass(row) {
+  const stock = Number(row.stock || 0);
+  if (stock <= 0) return "stock-zero";
+  return stock <= Number(row.min || 0) ? "stock-below-min" : "stock-above-min";
+}

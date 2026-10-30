@@ -1,4 +1,4 @@
-import { groupRowsByProduct, sortBySku } from "./utils";
+import { groupRowsByProduct, sortBySku, stockRowHighlightClass } from "./utils";
 
 describe("sortBySku", () => {
   it("sorts naturally by SKU without changing the source array", () => {
@@ -38,5 +38,13 @@ describe("sortBySku", () => {
         variants: [{ product_id: "b", name: "Calça", sku: "SKU-2", size: "M" }],
       },
     ]);
+  });
+
+  it("highlights zero stock red, stock at or below minimum yellow, and above minimum green", () => {
+    expect(stockRowHighlightClass({ stock: 0, min: 2 })).toBe("stock-zero");
+    expect(stockRowHighlightClass({ stock: 1, min: 2 })).toBe("stock-below-min");
+    expect(stockRowHighlightClass({ stock: 2, min: 2 })).toBe("stock-below-min");
+    expect(stockRowHighlightClass({ stock: 3, min: 2 })).toBe("stock-above-min");
+    expect(stockRowHighlightClass({ stock: 1, min: 0 })).toBe("stock-above-min");
   });
 });

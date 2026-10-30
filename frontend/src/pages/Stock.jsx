@@ -8,7 +8,7 @@ import ProductSearchSelect from "@/components/ProductSearchSelect";
 import useSubmitLock from "@/hooks/useSubmitLock";
 import { useAuth } from "@/contexts/AuthContext";
 import { getStockHistoryRows } from "@/lib/stockHistory";
-import { groupRowsByProduct } from "@/lib/utils";
+import { groupRowsByProduct, stockRowHighlightClass } from "@/lib/utils";
 
 const KIND_STYLE = {
   ENTRADA: "bg-green-100 text-green-800", SAIDA: "bg-red-100 text-red-800", AVARIA: "bg-red-200 text-red-900",
@@ -35,15 +35,16 @@ const openPrint = (title, rows) => {
   const tableRows = groupRowsByProduct(rows).map((group) => `
     <tr class="product-title"><td colspan="5">${escapeHtml(group.name)}</td></tr>
     ${group.variants.map((row) => `
-      <tr>
+      <tr class="${stockRowHighlightClass(row)}">
         <td>${escapeHtml(row.sku)}</td><td>${escapeHtml(row.name)}</td><td>${escapeHtml(row.cat)}</td>
         <td>${escapeHtml(row.size)}</td><td>${escapeHtml(row.stock)}</td>
       </tr>`).join("")}`).join("");
   w.document.write(`<html><head><title>${title}</title><style>
-    body{font-family:Arial,sans-serif;padding:20px}h1{font-size:18px;margin:0 0 4px;color:#4B5320}
+    body{font-family:Arial,sans-serif;padding:20px;-webkit-print-color-adjust:exact;print-color-adjust:exact}h1{font-size:18px;margin:0 0 4px;color:#4B5320}
     table{width:100%;border-collapse:collapse;margin-top:10px}th{background:#111;color:#D9C9A0}
     th,td{text-align:center}
     .product-title td{font-weight:bold;background:#E8E2D5;color:#354017;font-size:12px;border-top:2px solid #4B5320}
+    .stock-above-min{background:#edf7ed}.stock-below-min{background:#fff8e6}.stock-zero{background:#fdeeee}
     th,td{border:1px solid #444;padding:4px 6px;font-size:11px}</style></head><body>
     <h1>LOKAL MILITAR — ${title}</h1><div style="font-size:11px">Emitido em ${new Date().toLocaleString("pt-BR")}</div>
     <table><thead><tr><th>SKU</th><th>Produto</th><th>Categoria</th><th>Tamanho</th><th>Quantidade</th></tr></thead>
@@ -138,7 +139,7 @@ export default function Stock() {
     const tableRows = groupRowsByProduct(allRows).map((group) => `
       <tr class="product-title"><td colspan="4">${escapeHtml(group.name)}</td></tr>
       ${group.variants.map((row) => `
-        <tr>
+        <tr class="${stockRowHighlightClass(row)}">
           <td></td>
           <td>${escapeHtml(row.size)}</td>
           <td>${escapeHtml(row.stock)}</td>
@@ -146,13 +147,14 @@ export default function Stock() {
         </tr>`).join("")}`).join("");
     printWindow.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Conferência de estoque</title>
       <style>
-        body{font:12px Arial,sans-serif;padding:24px;color:#222}
+        body{font:12px Arial,sans-serif;padding:24px;color:#222;-webkit-print-color-adjust:exact;print-color-adjust:exact}
         h1{font-size:18px;color:#354017;margin:0 0 6px}
         p{margin:0 0 12px}
         table{width:100%;border-collapse:collapse}
-        th,td{border:1px solid #888;padding:6px;text-align:left}
+        th,td{border:1px solid #888;padding:6px;text-align:center}
         th{background:#eee}
         .product-title td{font-weight:bold;background:#E8E2D5;color:#354017;border-top:2px solid #4B5320}
+        .stock-above-min{background:#edf7ed}.stock-below-min{background:#fff8e6}.stock-zero{background:#fdeeee}
         .count-cell{width:22%;height:26px}
         @media print{body{padding:0}}
       </style></head><body>
