@@ -36,12 +36,13 @@ const openPrint = (title, rows) => {
     <tr class="product-title"><td colspan="5">${escapeHtml(group.name)}</td></tr>
     ${group.variants.map((row) => `
       <tr>
-        <td>${escapeHtml(row.sku)}</td><td></td><td>${escapeHtml(row.cat)}</td>
+        <td>${escapeHtml(row.sku)}</td><td>${escapeHtml(row.name)}</td><td>${escapeHtml(row.cat)}</td>
         <td>${escapeHtml(row.size)}</td><td>${escapeHtml(row.stock)}</td>
       </tr>`).join("")}`).join("");
   w.document.write(`<html><head><title>${title}</title><style>
     body{font-family:Arial,sans-serif;padding:20px}h1{font-size:18px;margin:0 0 4px;color:#4B5320}
-    table{width:100%;border-collapse:collapse;margin-top:10px}th{background:#111;color:#D9C9A0;text-align:left}
+    table{width:100%;border-collapse:collapse;margin-top:10px}th{background:#111;color:#D9C9A0}
+    th,td{text-align:center}
     .product-title td{font-weight:bold;background:#E8E2D5;color:#354017;font-size:12px;border-top:2px solid #4B5320}
     th,td{border:1px solid #444;padding:4px 6px;font-size:11px}</style></head><body>
     <h1>LOKAL MILITAR — ${title}</h1><div style="font-size:11px">Emitido em ${new Date().toLocaleString("pt-BR")}</div>
