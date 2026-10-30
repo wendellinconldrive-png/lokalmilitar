@@ -8,7 +8,7 @@ import ProductSearchSelect from "@/components/ProductSearchSelect";
 import useSubmitLock from "@/hooks/useSubmitLock";
 import { useAuth } from "@/contexts/AuthContext";
 import { getStockHistoryRows } from "@/lib/stockHistory";
-import { sortBySku } from "@/lib/utils";
+import { groupRowsByProduct } from "@/lib/utils";
 
 const KIND_STYLE = {
   ENTRADA: "bg-green-100 text-green-800", SAIDA: "bg-red-100 text-red-800", AVARIA: "bg-red-200 text-red-900",
@@ -32,13 +32,21 @@ const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (character
 const openPrint = (title, rows) => {
   const w = window.open("", "_blank");
   if (!w) return toast.error("Permita pop-ups para imprimir");
+  const tableRows = groupRowsByProduct(rows).map((group) => `
+    <tr class="product-title"><td colspan="5">${escapeHtml(group.name)}</td></tr>
+    ${group.variants.map((row) => `
+      <tr>
+        <td>${escapeHtml(row.sku)}</td><td></td><td>${escapeHtml(row.cat)}</td>
+        <td>${escapeHtml(row.size)}</td><td>${escapeHtml(row.stock)}</td>
+      </tr>`).join("")}`).join("");
   w.document.write(`<html><head><title>${title}</title><style>
     body{font-family:Arial,sans-serif;padding:20px}h1{font-size:18px;margin:0 0 4px;color:#4B5320}
     table{width:100%;border-collapse:collapse;margin-top:10px}th{background:#111;color:#D9C9A0;text-align:left}
+    .product-title td{font-weight:bold;background:#E8E2D5;color:#354017;font-size:12px;border-top:2px solid #4B5320}
     th,td{border:1px solid #444;padding:4px 6px;font-size:11px}</style></head><body>
     <h1>LOKAL MILITAR — ${title}</h1><div style="font-size:11px">Emitido em ${new Date().toLocaleString("pt-BR")}</div>
     <table><thead><tr><th>SKU</th><th>Produto</th><th>Categoria</th><th>Tamanho</th><th>Quantidade</th></tr></thead>
-    <tbody>${sortBySku(rows).map((r) => `<tr><td>${r.sku || ""}</td><td>${r.name}</td><td>${r.cat}</td><td>${r.size}</td><td>${r.stock}</td></tr>`).join("")}</tbody></table>
+    <tbody>${tableRows}</tbody></table>
     <script>window.onload=()=>window.print()</script></body></html>`);
   w.document.close();
 };
@@ -126,13 +134,15 @@ export default function Stock() {
   const printReconciliationSheet = () => {
     const printWindow = window.open("", "_blank");
     if (!printWindow) return toast.error("Permita pop-ups para imprimir a conferência");
-    const tableRows = sortBySku(allRows).map((row) => `
-      <tr>
-        <td>${escapeHtml(row.name)}</td>
-        <td>${escapeHtml(row.size)}</td>
-        <td>${escapeHtml(row.stock)}</td>
-        <td class="count-cell"></td>
-      </tr>`).join("");
+    const tableRows = groupRowsByProduct(allRows).map((group) => `
+      <tr class="product-title"><td colspan="4">${escapeHtml(group.name)}</td></tr>
+      ${group.variants.map((row) => `
+        <tr>
+          <td></td>
+          <td>${escapeHtml(row.size)}</td>
+          <td>${escapeHtml(row.stock)}</td>
+          <td class="count-cell"></td>
+        </tr>`).join("")}`).join("");
     printWindow.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Conferência de estoque</title>
       <style>
         body{font:12px Arial,sans-serif;padding:24px;color:#222}
@@ -141,6 +151,7 @@ export default function Stock() {
         table{width:100%;border-collapse:collapse}
         th,td{border:1px solid #888;padding:6px;text-align:left}
         th{background:#eee}
+        .product-title td{font-weight:bold;background:#E8E2D5;color:#354017;border-top:2px solid #4B5320}
         .count-cell{width:22%;height:26px}
         @media print{body{padding:0}}
       </style></head><body>

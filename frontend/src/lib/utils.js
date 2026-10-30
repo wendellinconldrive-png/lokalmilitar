@@ -14,3 +14,14 @@ export function sortBySku(items) {
     return leftSku.localeCompare(rightSku, "pt-BR", { numeric: true, sensitivity: "base" });
   });
 }
+
+export function groupRowsByProduct(rows) {
+  const groups = new Map();
+  sortBySku(rows).forEach((row) => {
+    const productId = row.product_id || row.id;
+    const group = groups.get(productId);
+    if (group) group.variants.push(row);
+    else groups.set(productId, { id: productId, name: row.name || "", sku: row.sku || "", variants: [row] });
+  });
+  return [...groups.values()];
+}
