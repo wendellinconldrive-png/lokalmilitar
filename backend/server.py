@@ -2664,19 +2664,28 @@ async def close_dashboard_day(
         await db.day_closures.update_one(
             {"date": day}, {"$set": {"backup_id": backup["id"]}}
         )
-    await db.day_closures.update_one(
-        {"date": day, "logout_epoch": {"$exists": False}},
-        {"$set": {"logout_epoch": new_id()}},
-    )
-    closure = await db.day_closures.find_one({"date": day}, {"_id": 0, "logout_epoch": 1})
-    if closure and closure.get("logout_epoch"):
-        await db.auth_state.update_one(
-            {"_id": "global"},
-            {"$set": {"epoch": closure["logout_epoch"], "updated_at": now_iso()}},
-            upsert=True,
-        )
-        report["global_logout_done"] = True
     return report
+
+@api.post("/dashboard/close-day/confirm")
+async def confirm_dashboard_day_closure(user: dict = Depends(require_admin)):
+    day = datetime.now(BUSINESS_TIMEZONE).date().isoformat()
+    logout_epoch = new_id()
+    result = await db.day_closures.update_one(
+        {"date": day},
+        {"$set": {
+            "logout_epoch": logout_epoch,
+            "logout_confirmed_at": now_iso(),
+            "logout_confirmed_by": user.get("id"),
+        }},
+    )
+    if result.matched_count == 0:
+        raise HTTPException(404, "Fechamento do dia não encontrado")
+    await db.auth_state.update_one(
+        {"_id": "global"},
+        {"$set": {"epoch": logout_epoch, "updated_at": now_iso()}},
+        upsert=True,
+    )
+    return {"global_logout_done": True}
 
 @api.get("/dashboard")
 async def dashboard(user: dict = Depends(get_current_user), days: int = Query(7, ge=7, le=30)):

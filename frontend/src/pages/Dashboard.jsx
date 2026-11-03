@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, formatBRL } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
@@ -52,7 +52,7 @@ const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (character
   "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
 }[character]));
 
-const printDayClosure = (report) => {
+const printDayClosure = (report, stockCheckRows = []) => {
   const printWindow = window.open("", "_blank");
   if (!printWindow) return false;
   const table = (headers, rows) => `
@@ -63,6 +63,14 @@ const printDayClosure = (report) => {
   ]);
   const stockRows = report.stock_movements.map((movement) => [
     movement.kind, movement.product_name, movement.size, movement.qty, movement.nf || movement.reason || "",
+  ]);
+  const stockCheckTableRows = stockCheckRows.map((row) => [
+    row.productName,
+    row.size,
+    row.moved,
+    row.systemStock ?? "—",
+    row.physicalStock ?? "—",
+    row.difference ?? "—",
   ]);
   const expenseRows = report.expenses.map((expense) => [
     expense.type, expense.description, expense.km ?? "", expense.odometer_km ?? "",
@@ -76,6 +84,7 @@ const printDayClosure = (report) => {
     <div class="summary"><div>Pedidos: ${report.summary.orders_count} · ${formatBRL(report.summary.orders_total)}</div><div>Movimentações de estoque: ${report.summary.stock_movements_count}</div><div>Despesas: ${report.summary.expenses_count} · ${formatBRL(report.summary.expenses_total)}</div></div>
     <h2>Pedidos, vendas, trocas e devoluções</h2>${table(["Pedido", "Tipo", "Cliente", "Status", "Total"], orderRows)}
     <h2>Movimentações de estoque</h2>${table(["Tipo", "Produto", "Tamanho", "Qtd.", "NF / Motivo"], stockRows)}
+    <h2>Conferência física dos itens movimentados</h2>${table(["Produto", "Tamanho", "Qtd. movimentada no dia", "Estoque atual no sistema", "Estoque físico", "Diferença"], stockCheckTableRows)}
     <h2>Despesas, insumos e viagens</h2>${table(["Tipo", "Descrição", "KM", "KM no painel", "Valor"], expenseRows)}
     </body></html>`);
   printWindow.document.close();
@@ -101,6 +110,11 @@ export default function Dashboard() {
   const [selectedClosureDate, setSelectedClosureDate] = useState("");
   const [loadingClosureHistory, setLoadingClosureHistory] = useState(false);
   const [closureReport, setClosureReport] = useState(null);
+  const [closureNeedsConfirmation, setClosureNeedsConfirmation] = useState(false);
+  const [closureProducts, setClosureProducts] = useState(null);
+  const [physicalCounts, setPhysicalCounts] = useState({});
+  const [applyingPhysicalCounts, setApplyingPhysicalCounts] = useState(false);
+  const [confirmingClosure, setConfirmingClosure] = useState(false);
   const [downloadingBackup, setDownloadingBackup] = useState(false);
   const [events, setEvents] = useState([]);
   const [eventsLoading, setEventsLoading] = useState(true);
@@ -150,6 +164,112 @@ export default function Dashboard() {
       });
     return () => { active = false; };
   }, []);
+
+  useEffect(() => {
+      if (!closureReport) {
+        setClosureProducts(null);
+        setPhysicalCounts({});
+        return undefined;
+      }
+
+      let active = true;
+      setClosureProducts(null);
+      setPhysicalCounts({});
+      api.get("/products")
+        .then(({ data: products }) => {
+          if (active) setClosureProducts(products);
+        })
+        .catch((productsError) => {
+          if (active) {
+            setClosureProducts([]);
+            toast.error(productsError.response?.data?.detail || "Não foi possível carregar o estoque atual para conferência");
+          }
+        });
+      return () => { active = false; };
+  }, [closureReport]);
+
+  const movedStockReport = useMemo(() => {
+      if (!closureReport) return [];
+      const productsById = new Map((closureProducts || []).map((product) => [product.id, product]));
+      const grouped = new Map();
+      closureReport.stock_movements.forEach((movement) => {
+        const key = `${movement.product_id || movement.product_name}:${movement.size || ""}`;
+        const existing = grouped.get(key);
+        if (existing) {
+          existing.moved += Math.abs(Number(movement.qty || 0));
+        } else {
+          const product = productsById.get(movement.product_id);
+          const variant = product?.sizes?.find((item) => String(item.size) === String(movement.size));
+          grouped.set(key, {
+            key,
+            productId: movement.product_id,
+            productName: movement.product_name || product?.name || "Produto não identificado",
+            size: movement.size || "—",
+            moved: Math.abs(Number(movement.qty || 0)),
+            systemStock: variant ? Number(variant.stock || 0) : null,
+          });
+        }
+      });
+      return [...grouped.values()].sort((first, second) => (
+        first.productName.localeCompare(second.productName, "pt-BR")
+        || first.size.localeCompare(second.size, "pt-BR")
+      ));
+  }, [closureProducts, closureReport]);
+
+  const applyPhysicalStockCounts = () => withSubmitLock("apply-physical-stock-counts", async () => {
+    const items = movedStockReport.flatMap((row) => {
+      const rawQuantity = physicalCounts[row.key];
+      if (rawQuantity === undefined || rawQuantity.trim() === "") return [];
+      const quantity = Number(rawQuantity);
+      if (!Number.isFinite(quantity) || quantity < 0) return [{ invalid: true }];
+      return [{ product_id: row.productId, size: row.size, quantity }];
+    });
+    if (!items.length) {
+      toast.error("Informe o estoque físico de ao menos um item movimentado");
+      return;
+    }
+    if (items.some((item) => item.invalid)) {
+      toast.error("Informe quantidades físicas válidas e iguais ou maiores que zero");
+      return;
+    }
+    if (items.some((item) => {
+      const row = movedStockReport.find((entry) => entry.productId === item.product_id && entry.size === item.size);
+      return !item.product_id || !row || row.systemStock === null;
+    })) {
+      toast.error("Não foi possível identificar o produto e tamanho de uma das contagens informadas");
+      return;
+    }
+    const changedItems = items.filter((item) => {
+      const row = movedStockReport.find((entry) => entry.productId === item.product_id && entry.size === item.size);
+      return row && row.systemStock !== item.quantity;
+    });
+    if (!changedItems.length) {
+      toast.info("As quantidades físicas informadas já correspondem ao estoque do sistema");
+      return;
+    }
+
+    setApplyingPhysicalCounts(true);
+    try {
+      const { data: result } = await api.post("/stock_movements/reconcile", { items: changedItems });
+      const { data: products } = await api.get("/products");
+      setClosureProducts(products);
+      toast.success(result.updated
+        ? `${result.updated} quantidade(s) de estoque atualizada(s) pela conferência física`
+        : "O estoque já corresponde às quantidades físicas informadas");
+    } catch (reconcileError) {
+      if (reconcileError.response?.status === 409) {
+        try {
+          const { data: products } = await api.get("/products");
+          setClosureProducts(products);
+        } catch (refreshError) {
+          toast.error(refreshError.response?.data?.detail || "Não foi possível atualizar o estoque após o conflito");
+        }
+      }
+      toast.error(reconcileError.response?.data?.detail || "Não foi possível atualizar o estoque pela conferência");
+    } finally {
+      setApplyingPhysicalCounts(false);
+    }
+  });
 
   const createEvent = () => withSubmitLock("create-dashboard-event", async () => {
     try {
@@ -217,8 +337,8 @@ export default function Dashboard() {
       const { data: report } = await api.post("/dashboard/close-day", payload);
       setCloseDayDialogOpen(false);
       setClosureReport(report);
-      toast.success("Fechamento concluído. As sessões serão encerradas em todos os dispositivos.");
-      window.setTimeout(logout, 8000);
+      setClosureNeedsConfirmation(true);
+      toast.success("Fechamento concluído. Confira as movimentações antes de confirmar e sair.");
     } catch (closeError) {
       toast.error(closeError.response?.data?.detail || "Não foi possível finalizar o dia");
     } finally {
@@ -250,6 +370,7 @@ export default function Dashboard() {
       const { data: report } = await api.get(`/dashboard/closures/${selectedClosureDate}`);
       setClosureHistoryOpen(false);
       setClosureReport(report);
+      setClosureNeedsConfirmation(false);
     } catch (historyError) {
       toast.error(historyError.response?.data?.detail || "Não foi possível carregar o fechamento selecionado");
     } finally {
@@ -277,6 +398,19 @@ export default function Dashboard() {
       setDownloadingBackup(false);
     }
   };
+
+  const confirmClosureAndLogout = () => withSubmitLock("confirm-day-close", async () => {
+    setConfirmingClosure(true);
+    try {
+      await api.post("/dashboard/close-day/confirm");
+      toast.success("Fechamento confirmado. Saindo do sistema.");
+      logout();
+    } catch (confirmError) {
+      toast.error(confirmError.response?.data?.detail || "Não foi possível confirmar o fechamento");
+    } finally {
+      setConfirmingClosure(false);
+    }
+  });
 
   if (error) return <div className="font-mono" role="alert">{error}</div>;
   if (!data) return <div className="font-mono">Carregando operação...</div>;
@@ -519,7 +653,12 @@ export default function Dashboard() {
           </div>
         </DialogContent>
       </Dialog>
-      <Dialog open={!!closureReport} onOpenChange={(isOpen) => !isOpen && setClosureReport(null)}>
+      <Dialog open={!!closureReport} onOpenChange={(isOpen) => {
+        if (!isOpen) {
+          setClosureReport(null);
+          setClosureNeedsConfirmation(false);
+        }
+      }}>
         <DialogContent className="max-w-5xl max-h-[90vh] overflow-y-auto" data-testid="day-closure-report">
           <DialogHeader>
             <DialogTitle className="font-head">Fechamento do dia {closureReport?.date.split("-").reverse().join("/")}</DialogTitle>
@@ -538,7 +677,21 @@ export default function Dashboard() {
                   </button>
                 )}
                 <button className="lm-btn lm-btn-dark" onClick={() => {
-                  if (!printDayClosure(closureReport)) toast.error("Permita pop-ups para imprimir o relatório");
+                  const checkRows = movedStockReport.map((row) => {
+                    const rawPhysicalStock = physicalCounts[row.key];
+                    const physicalStock = rawPhysicalStock !== undefined && rawPhysicalStock !== ""
+                      && Number.isFinite(Number(rawPhysicalStock))
+                      ? Number(rawPhysicalStock)
+                      : null;
+                    return {
+                      ...row,
+                      physicalStock,
+                      difference: physicalStock !== null && row.systemStock !== null
+                        ? physicalStock - row.systemStock
+                        : null,
+                    };
+                  });
+                  if (!printDayClosure(closureReport, checkRows)) toast.error("Permita pop-ups para imprimir o relatório");
                 }} data-testid="print-day-closure"><Printer size={15} />Imprimir relatório</button>
                 </div>
               </div>
@@ -564,6 +717,57 @@ export default function Dashboard() {
                 </table></div>
               </section>
               <section>
+                <h3 className="font-head mb-1">Conferência física dos itens movimentados</h3>
+                <p className="text-xs text-neutral-600 mb-2">Informe a contagem física dos produtos movimentados. Ao aplicar, o estoque do sistema será ajustado para corresponder à contagem.</p>
+                <div className="lm-table-wrap overflow-x-auto"><table className="lm-table">
+                  <thead><tr><th>Produto</th><th>Tamanho</th><th>Qtd. movimentada no dia</th><th>Estoque atual no sistema</th><th>Estoque físico</th><th>Diferença</th></tr></thead>
+                  <tbody>{movedStockReport.map((row) => {
+                    const rawPhysicalStock = physicalCounts[row.key];
+                    const physicalStock = rawPhysicalStock !== undefined && rawPhysicalStock !== ""
+                      ? Number(rawPhysicalStock)
+                      : null;
+                    const difference = physicalStock !== null && Number.isFinite(physicalStock) && row.systemStock !== null
+                      ? physicalStock - row.systemStock
+                      : null;
+                    return (
+                      <tr key={row.key}>
+                        <td>{row.productName}</td>
+                        <td>{row.size}</td>
+                        <td>{row.moved}</td>
+                        <td>{closureProducts === null ? "Carregando..." : row.systemStock ?? "—"}</td>
+                        <td>
+                          <Input
+                            type="number"
+                            min="0"
+                            step="1"
+                            className="!w-24"
+                            value={rawPhysicalStock ?? ""}
+                            onChange={(event) => setPhysicalCounts((current) => ({ ...current, [row.key]: event.target.value }))}
+                            aria-label={`Estoque físico de ${row.productName}, tamanho ${row.size}`}
+                            data-testid={`physical-stock-${row.key}`}
+                          />
+                        </td>
+                        <td className={difference === null ? "" : difference === 0 ? "text-green-700" : "text-red-700"}>
+                          {difference === null ? "—" : difference}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                    {movedStockReport.length === 0 && <tr><td colSpan={6} className="text-center py-3">Nenhum item movimentado para conferir.</td></tr>}
+                  </tbody>
+                </table></div>
+                <div className="mt-3 flex justify-end">
+                  <button
+                    className="lm-btn lm-btn-olive"
+                    onClick={applyPhysicalStockCounts}
+                    disabled={applyingPhysicalCounts || closureProducts === null || isPending("apply-physical-stock-counts") || !movedStockReport.length}
+                    data-testid="apply-physical-stock-counts"
+                  >
+                    {applyingPhysicalCounts ? "ATUALIZANDO ESTOQUE..." : "APLICAR CONTAGEM E ATUALIZAR ESTOQUE"}
+                  </button>
+                </div>
+              </section>
+              <section>
                 <h3 className="font-head mb-2">Despesas, insumos e viagens</h3>
                 <div className="lm-table-wrap overflow-x-auto"><table className="lm-table">
                   <thead><tr><th>Tipo</th><th>Descrição</th><th>KM</th><th>KM no painel</th><th>Valor</th></tr></thead>
@@ -571,6 +775,18 @@ export default function Dashboard() {
                     {closureReport.expenses.length === 0 && <tr><td colSpan={5} className="text-center py-3">Sem despesas no dia.</td></tr>}</tbody>
                 </table></div>
               </section>
+              <div className="flex flex-wrap justify-end gap-2 border-t pt-4">
+                {closureNeedsConfirmation && (
+                  <button
+                    className="lm-btn lm-btn-olive"
+                    onClick={confirmClosureAndLogout}
+                    disabled={confirmingClosure || isPending("confirm-day-close")}
+                    data-testid="confirm-day-close-and-logout"
+                  >
+                    {confirmingClosure ? "CONFIRMANDO..." : "CONFIRMAR E SAIR"}
+                  </button>
+                )}
+              </div>
             </div>
           )}
         </DialogContent>

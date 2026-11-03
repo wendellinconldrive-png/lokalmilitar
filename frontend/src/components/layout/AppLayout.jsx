@@ -92,10 +92,11 @@ export default function AppLayout() {
       localStorage.setItem(lockKey, String(Date.now()));
       try {
         await api.post("/dashboard/close-day");
+        await api.post("/dashboard/close-day/confirm");
         localStorage.setItem(closedKey, "done");
         localStorage.removeItem(lockKey);
-        toast.success("Fechamento concluído. As sessões serão encerradas em todos os dispositivos.");
-        window.setTimeout(logout, 8000);
+        toast.success("Fechamento automático das 19h concluído. As sessões serão encerradas.");
+        window.setTimeout(logout, 1000);
       } catch (closeError) {
         localStorage.removeItem(lockKey);
         console.error("Não foi possível fechar automaticamente o dia.", closeError);

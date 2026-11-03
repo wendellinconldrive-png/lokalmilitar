@@ -1415,7 +1415,7 @@ def test_day_close_is_saved_and_idempotent(admin):
     assert report["summary"]["stock_out_quantity"] >= 23
     assert report["summary"]["stock_return_quantity"] >= 5
     assert "stock_reconciliation" not in report
-    assert report["global_logout_done"] is True
+    assert "global_logout_done" not in report
     assert any(
         movement.get("order_id") == order["id"] and movement["kind"] == "ENTRADA"
         for movement in report["stock_movements"]
@@ -1452,6 +1452,12 @@ def test_day_close_is_saved_and_idempotent(admin):
     assert saved_report.status_code == 200, saved_report.text
     assert saved_report.json()["id"] == report["id"]
     assert any(item["id"] == order["id"] for item in saved_report.json()["orders"])
+    assert admin.get(f"{BASE_URL}/api/auth/me").status_code == 200
+
+    confirmed = admin.post(f"{BASE_URL}/api/dashboard/close-day/confirm")
+    assert confirmed.status_code == 200, confirmed.text
+    assert confirmed.json()["global_logout_done"] is True
+    assert admin.get(f"{BASE_URL}/api/auth/me").status_code == 401
 
 
 def test_auto_endpoint_aliases_vehicle_crud(admin):
