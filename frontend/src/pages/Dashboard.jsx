@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { api, formatBRL } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
-import { Shirt, Footprints, Package, Award, ClipboardList, Clock, Users, CircleDollarSign, AlertTriangle, Scissors, Car, Shield, Star, ClipboardCheck, Printer, CalendarDays, Download } from "lucide-react";
+import { Shirt, Footprints, Package, Award, ClipboardList, Clock, Users, CircleDollarSign, AlertTriangle, Scissors, Car, Shield, Star, ClipboardCheck, Printer, CalendarDays, CalendarPlus, Download, Trash2 } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, CartesianGrid } from "recharts";
 import { DASHBOARD_KPIS, getVisibleDashboardGridPositions } from "@/pages/dashboardPreferences";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -12,6 +12,12 @@ import useSubmitLock from "@/hooks/useSubmitLock";
 
 const ICONS = { Shirt, Footprints, Package, Award, Shield, Star };
 const UNIT = { "Fardamento": "peças", "Calçados": "pares" };
+const localDateValue = () => {
+  const date = new Date();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${date.getFullYear()}-${month}-${day}`;
+};
 
 const DashboardCardHeader = ({ children, icon: Icon, iconColor, textColor }) => (
   <div className="lm-card-head" style={{ background: "var(--card-header-background)", color: textColor || "var(--card-header-text)" }}>
@@ -78,7 +84,7 @@ const printDayClosure = (report) => {
 };
 
 export default function Dashboard() {
-  const { run: withSubmitLock } = useSubmitLock();
+  const { run: withSubmitLock, isPending } = useSubmitLock();
   const nav = useNavigate();
   const { dashboardPreferences, user, logout } = useAuth();
   const isAdmin = user?.role === "admin";
@@ -96,7 +102,14 @@ export default function Dashboard() {
   const [loadingClosureHistory, setLoadingClosureHistory] = useState(false);
   const [closureReport, setClosureReport] = useState(null);
   const [downloadingBackup, setDownloadingBackup] = useState(false);
+  const [events, setEvents] = useState([]);
+  const [eventsLoading, setEventsLoading] = useState(true);
+  const [eventDialogOpen, setEventDialogOpen] = useState(false);
+  const [eventTitle, setEventTitle] = useState("");
+  const [eventDescription, setEventDescription] = useState("");
+  const [eventDate, setEventDate] = useState(localDateValue);
   const { chart_days: chartDays, chart_type: chartType, order, visibility, grid_positions: configuredGridPositions } = dashboardPreferences;
+  const showAnnouncements = dashboardPreferences.show_announcements !== false;
   const textColor = dashboardPreferences.card_text_customized ? dashboardPreferences.colors.card_text : null;
   const colors = {
     background: "transparent",
@@ -122,6 +135,53 @@ export default function Dashboard() {
       })
       .catch(() => setError("Não foi possível carregar os dados do dashboard."));
   }, [chartDays]);
+
+  useEffect(() => {
+    let active = true;
+    api.get("/dashboard/events")
+      .then(({ data: loadedEvents }) => {
+        if (active) setEvents(loadedEvents);
+      })
+      .catch((eventError) => {
+        if (active) toast.error(eventError.response?.data?.detail || "Não foi possível carregar os eventos");
+      })
+      .finally(() => {
+        if (active) setEventsLoading(false);
+      });
+    return () => { active = false; };
+  }, []);
+
+  const createEvent = () => withSubmitLock("create-dashboard-event", async () => {
+    try {
+      const { data: createdEvent } = await api.post("/dashboard/events", {
+        title: eventTitle,
+        description: eventDescription,
+        event_date: eventDate,
+      });
+      setEvents((current) => [createdEvent, ...current].sort((first, second) => (
+        second.event_date.localeCompare(first.event_date)
+        || second.created_at.localeCompare(first.created_at)
+      )));
+      setEventTitle("");
+      setEventDescription("");
+      setEventDate(localDateValue());
+      setEventDialogOpen(false);
+      toast.success("Evento registrado");
+    } catch (eventError) {
+      toast.error(eventError.response?.data?.detail || "Não foi possível registrar o evento");
+    }
+  });
+
+  const deleteEvent = async (eventId) => {
+    if (!window.confirm("Excluir este evento do quadro de avisos?")) return;
+    try {
+      await api.delete(`/dashboard/events/${eventId}`);
+      setEvents((current) => current.filter((event) => event.id !== eventId));
+      toast.success("Evento removido");
+    } catch (eventError) {
+      toast.error(eventError.response?.data?.detail || "Não foi possível remover o evento");
+    }
+  };
 
   const openCloseDayDialog = async () => {
     try {
@@ -238,6 +298,9 @@ export default function Dashboard() {
     "chart",
   ];
   const displayOrder = [...order.filter((id) => available.includes(id)), ...available.filter((id) => !order.includes(id))];
+  const visibleItems = displayOrder.filter((id) => id === "chart"
+    ? visibility.chart !== false || showAnnouncements
+    : visibility[id] !== false);
   const gridPositions = getVisibleDashboardGridPositions(
     displayOrder,
     available.filter((id) => id !== "chart"),
@@ -251,6 +314,33 @@ export default function Dashboard() {
       return tile && <CategoryCard key={id} cat={tile} colors={colors} textColor={textColor} position={gridPositions[id]} onClick={() => nav(`/estoque?cat=${encodeURIComponent(tile.name)}`)} />;
     }
     if (id === "chart") {
+      if (visibility.chart === false) {
+        if (!showAnnouncements) return null;
+        return (
+          <section key="announcements" className="lm-card overflow-hidden col-span-full" style={{ background: colors.card_background, color: colors.card_text, borderColor: colors.card_border }} data-testid="dashboard-announcements">
+            <DashboardCardHeader icon={CalendarDays} iconColor={colors.chart_accent} textColor={textColor}>Quadro de avisos</DashboardCardHeader>
+            <div className="p-4 space-y-3">
+              {eventsLoading ? <p className="text-sm text-neutral-500">Carregando eventos...</p> : events.length ? (
+                events.map((event) => (
+                  <article key={event.id} className="flex items-start justify-between gap-3 border-b pb-3 last:border-0 last:pb-0" data-testid={`dashboard-event-${event.id}`}>
+                    <div>
+                      <h3 className="font-semibold">{event.title}</h3>
+                      <p className="text-xs text-neutral-500">
+                        {new Date(`${event.event_date}T00:00:00`).toLocaleDateString("pt-BR")}
+                        {event.created_by ? ` · Registrado por ${event.created_by}` : ""}
+                      </p>
+                      {event.description && <p className="mt-1 text-sm whitespace-pre-wrap">{event.description}</p>}
+                    </div>
+                    {isAdmin && <button className="text-red-700 p-1" onClick={() => deleteEvent(event.id)} aria-label={`Excluir evento ${event.title}`} title="Excluir evento">
+                      <Trash2 size={15} />
+                    </button>}
+                  </article>
+                ))
+              ) : <p className="text-sm text-neutral-500">Nenhum evento registrado.</p>}
+            </div>
+          </section>
+        );
+      }
       return (
         <section key={id} className="lm-card overflow-hidden col-span-full" style={{ background: colors.card_background, color: colors.card_text, borderColor: colors.card_border }}>
           <DashboardCardHeader textColor={textColor}>Vendas · últimos {chartDays} dias</DashboardCardHeader>
@@ -290,6 +380,9 @@ export default function Dashboard() {
             <button className="lm-btn lm-btn-dark" onClick={openClosureHistory} disabled={loadingClosureHistory} data-testid="view-day-closures">
               <CalendarDays size={16} />{loadingClosureHistory ? "CARREGANDO..." : "DIAS ANTERIORES"}
             </button>
+            <button className="lm-btn lm-btn-olive" onClick={() => setEventDialogOpen(true)} data-testid="register-dashboard-event">
+              <CalendarPlus size={16} />REGISTRAR EVENTO
+            </button>
             <button className="lm-btn lm-btn-olive" onClick={openCloseDayDialog} disabled={closingDay} data-testid="close-day">
               <ClipboardCheck size={16} />{closingDay ? "FINALIZANDO..." : "FINALIZAR DIA"}
             </button>
@@ -302,8 +395,32 @@ export default function Dashboard() {
         </p>
       )}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {displayOrder.filter((id) => visibility[id] !== false).map(renderItem)}
+        {visibleItems.map(renderItem)}
       </div>
+      <Dialog open={eventDialogOpen} onOpenChange={setEventDialogOpen}>
+        <DialogContent data-testid="dashboard-event-dialog">
+          <DialogHeader>
+            <DialogTitle className="font-head">Registrar evento</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <label className="block text-sm">Título
+              <Input value={eventTitle} onChange={(event) => setEventTitle(event.target.value)} maxLength={120} data-testid="dashboard-event-title" />
+            </label>
+            <label className="block text-sm">Data
+              <Input type="date" value={eventDate} onChange={(event) => setEventDate(event.target.value)} data-testid="dashboard-event-date" />
+            </label>
+            <label className="block text-sm">Aviso
+              <textarea className="lm-input mt-1 min-h-24 w-full" value={eventDescription} onChange={(event) => setEventDescription(event.target.value)} maxLength={1000} data-testid="dashboard-event-description" />
+            </label>
+            <div className="flex justify-end gap-2">
+              <button className="lm-btn lm-btn-dark" onClick={() => setEventDialogOpen(false)}>Cancelar</button>
+              <button className="lm-btn lm-btn-olive" onClick={createEvent} disabled={!eventTitle.trim() || !eventDate || isPending("create-dashboard-event")} data-testid="save-dashboard-event">
+                {isPending("create-dashboard-event") ? "SALVANDO..." : "REGISTRAR"}
+              </button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
       <Dialog open={closureHistoryOpen} onOpenChange={(isOpen) => !loadingClosureHistory && setClosureHistoryOpen(isOpen)}>
         <DialogContent data-testid="day-closure-history">
           <DialogHeader>

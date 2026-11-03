@@ -1,4 +1,12 @@
-import { getVisibleDashboardGridPositions } from "./dashboardPreferences";
+import { DEFAULT_DASHBOARD_PREFERENCES, getVisibleDashboardGridPositions, mergeDashboardPreferences } from "./dashboardPreferences";
+
+describe("dashboard announcements preferences", () => {
+  it("shows announcements by default and preserves the explicit hidden setting", () => {
+    expect(DEFAULT_DASHBOARD_PREFERENCES.show_announcements).toBe(true);
+    expect(mergeDashboardPreferences({ show_announcements: false }).show_announcements).toBe(false);
+    expect(mergeDashboardPreferences({}).show_announcements).toBe(true);
+  });
+});
 
 describe("getVisibleDashboardGridPositions", () => {
   it("compacts visible cards while preserving their configured order", () => {

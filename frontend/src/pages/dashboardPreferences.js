@@ -25,6 +25,7 @@ export const DEFAULT_DASHBOARD_PREFERENCES = {
   card_text_customized: false,
   chart_type: "linha",
   chart_days: 7,
+  show_announcements: true,
   colors: DASHBOARD_COLORS,
 };
 
@@ -49,6 +50,7 @@ export function mergeDashboardPreferences(value) {
     card_text_customized: value.card_text_customized === true,
     chart_type: value.chart_type === "barras" ? "barras" : "linha",
     chart_days: [7, 14, 30].includes(value.chart_days) ? value.chart_days : 7,
+    show_announcements: value.show_announcements !== false,
     colors: { ...DASHBOARD_COLORS, ...value.colors },
   };
 }

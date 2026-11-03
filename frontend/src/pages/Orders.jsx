@@ -8,6 +8,7 @@ import { Plus, Edit, Trash2, Printer, FileText, Truck, Check, Download, SlidersH
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import PrintOrderA4, { PrintOrder80mm } from "@/components/PrintOrder";
+import CustomerSearchSelect from "@/components/CustomerSearchSelect";
 import CustomerSignaturePad from "@/components/CustomerSignaturePad";
 import ProductSearchSelect from "@/components/ProductSearchSelect";
 import useSubmitLock from "@/hooks/useSubmitLock";
@@ -103,7 +104,15 @@ export default function Orders({ mode }) {
 
   const prodById = useMemo(()=>Object.fromEntries(products.map(p=>[p.id,p])),[products]);
 
-  const openNew = () => { setEditing({ ...BLANK_ORDER, ...(isTrocas ? { type: "TROCA" } : {}) }); setOpen(true); };
+  const openNew = () => {
+    const assignedVendor = vendors.find((vendor) => vendor.id === user?.vendor_id);
+    setEditing({
+      ...BLANK_ORDER,
+      ...(isTrocas ? { type: "TROCA" } : {}),
+      ...(assignedVendor ? { vendor_id: assignedVendor.id, vendor_name: assignedVendor.name } : {}),
+    });
+    setOpen(true);
+  };
   const today = localDateValue();
   const shownOrders = useMemo(() => orders.filter((order) => {
     if (isTrocas && !["TROCA", "DEVOLUCAO"].includes(order.type)) return false;
@@ -201,7 +210,23 @@ export default function Orders({ mode }) {
     setFulfillment(null);
   };
 
-  const addItem = () => setEditing(e => ({ ...e, items:[...e.items, { product_id:"", name:"", size:"", qty:1, unit_price:0 }] }));
+  const addItem = useCallback(() => setEditing((current) => current && ({
+    ...current,
+    items: [...current.items, { product_id: "", name: "", size: "", qty: 1, unit_price: 0 }],
+  })), []);
+  useEffect(() => {
+    if (!open) return undefined;
+    const handleShortcut = (event) => {
+      const isPlus = event.key === "+" || event.key === "Add" || event.code === "NumpadAdd"
+        || (event.code === "Equal" && event.shiftKey);
+      if (event.ctrlKey && isPlus) {
+        event.preventDefault();
+        addItem();
+      }
+    };
+    window.addEventListener("keydown", handleShortcut);
+    return () => window.removeEventListener("keydown", handleShortcut);
+  }, [addItem, open]);
   const setItem = (i, patch) => setEditing(e => {
     const items = [...e.items]; items[i] = { ...items[i], ...patch }; return { ...e, items };
   });
@@ -833,19 +858,21 @@ export default function Orders({ mode }) {
                 </p>
               )}
 
-              <label><div className="text-[11px] font-mono text-neutral-500">Cliente</div>
-                <select className="input" value={editing.customer_id||""} onChange={e=>{
-                  const c = customers.find(x=>x.id===e.target.value);
-                  setEditing({...editing, customer_id:e.target.value, customer_name:c?.name||""});
-                }}>
-                  <option value="">— Selecionar —</option>
-                  {customers.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
-                </select>
+              <label className="block"><div className="text-[11px] font-mono text-neutral-500">Cliente</div>
+                <CustomerSearchSelect
+                  customers={customers}
+                  value={editing.customer_id || ""}
+                  onChange={(customerId) => {
+                    const customer = customers.find((item) => item.id === customerId);
+                    setEditing({ ...editing, customer_id: customerId, customer_name: customer?.name || "" });
+                  }}
+                  testid="order-customer-search"
+                />
                 {!editing.customer_id && <input className="input mt-2" placeholder="Nome livre (sem cadastro)" value={editing.customer_name} onChange={e=>setEditing({...editing, customer_name:e.target.value})}/>}
               </label>
 
               <label><div className="text-[11px] font-mono text-neutral-500">Vendedor</div>
-                <select className="input" value={editing.vendor_id||""} onChange={e=>{
+                <select className="input" value={editing.vendor_id||""} disabled={user?.role === "vendedor" && !!user.vendor_id} onChange={e=>{
                   const v = vendors.find(x=>x.id===e.target.value);
                   setEditing({...editing, vendor_id:e.target.value, vendor_name:v?.name||""});
                 }} data-testid="order-vendor">
@@ -873,7 +900,9 @@ export default function Orders({ mode }) {
               <div>
                 <div className="flex items-center justify-between">
                   <div className="font-head text-sm">Itens</div>
-                  <button type="button" className="text-xs underline" onClick={addItem}>+ Produto</button>
+                  <button type="button" className="text-xs underline" onClick={addItem} title="Atalho: Ctrl + Mais (+)" data-testid="add-order-item">
+                    + Produto <span className="ml-1 text-[10px] text-neutral-500">Ctrl + Mais (+)</span>
+                  </button>
                 </div>
                 {editing.items.map((it, i)=>(
                   <div key={i} className="grid grid-cols-4 sm:grid-cols-[repeat(15,minmax(0,1fr))] gap-2 mt-2 items-end">
@@ -882,7 +911,7 @@ export default function Orders({ mode }) {
                       value={it.product_id}
                       onChange={(productId) => {
                         const product = prodById[productId];
-                        setItem(i, { product_id: productId, name: product?.name || "", sku: product?.sku || "", size: "", unit_price: product?.price || 0 });
+                        setItem(i, { product_id: productId, name: product?.name || "", sku: product?.sku || "", size: "", unit_price: product?.price || 0, commission_value: product?.commission ?? 1 });
                       }}
                       placeholder="Buscar produto por nome ou SKU..."
                       className="col-span-4 sm:col-span-5"

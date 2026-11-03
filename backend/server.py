@@ -53,6 +53,7 @@ RESET_GROUPS = {
     "expenses": "Despesas, insumos, viagens e manutenções",
     "vendors": "Vendedores",
     "day_closures": "Relatórios de fechamento do dia",
+    "dashboard_events": "Eventos do quadro de avisos",
 }
 
 # ---------- DB ----------
@@ -205,6 +206,12 @@ class UserCreate(BaseModel):
     password: str
     name: str
     role: str = "vendedor"  # admin | vendedor | visualizador
+    vendor_id: Optional[str] = None
+
+class DashboardEventCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=120)
+    description: str = Field(default="", max_length=1000)
+    event_date: str
 
 class UserRegister(BaseModel):
     email: EmailStr
@@ -279,6 +286,7 @@ class Product(BaseModel):
     brand: Optional[str] = None
     cost: float = 0
     price: float = 0
+    commission: float = Field(default=1, ge=0, allow_inf_nan=False)
     shelf: Optional[str] = None
     photo: Optional[str] = None
     photo_url: Optional[str] = None
@@ -308,6 +316,7 @@ class OrderItem(BaseModel):
     size: Optional[str] = None
     qty: float = 1
     unit_price: float = 0
+    commission_value: float = Field(default=1, ge=0, allow_inf_nan=False)
     subtotal: float = 0
 
 class ReturnItem(BaseModel):
@@ -480,6 +489,11 @@ def make_crud(coll_name: str, Model, route_name: Optional[str] = None):
     async def create(payload: dict, user: dict = Depends(get_current_user)):
         obj = Model(**payload)
         doc = obj.model_dump()
+        if coll_name == "products":
+            commission = float(doc.get("commission", 1))
+            if not math.isfinite(commission) or commission < 0:
+                raise HTTPException(400, "A comissão do produto deve ser um valor não negativo")
+            doc["commission"] = commission
         if coll_name == "vehicles":
             fuel_types = doc.get("fuel_types") or ([doc["fuel_type"]] if doc.get("fuel_type") else [])
             if any(fuel_type not in FUEL_TYPES for fuel_type in fuel_types):
@@ -510,6 +524,14 @@ def make_crud(coll_name: str, Model, route_name: Optional[str] = None):
     @router.put("/{item_id}")
     async def update(item_id: str, payload: dict, user: dict = Depends(get_current_user)):
         payload.pop("id", None)
+        if coll_name == "products" and "commission" in payload:
+            try:
+                commission = float(payload["commission"])
+            except (TypeError, ValueError) as error:
+                raise HTTPException(400, "Informe um valor válido para a comissão do produto") from error
+            if not math.isfinite(commission) or commission < 0:
+                raise HTTPException(400, "A comissão do produto deve ser um valor não negativo")
+            payload["commission"] = commission
         if coll_name == "vehicles":
             current = await db.vehicles.find_one({"id": item_id}, {"_id": 0})
             if not current:
@@ -554,6 +576,8 @@ def make_crud(coll_name: str, Model, route_name: Optional[str] = None):
         old = await db[coll_name].find_one({"id": item_id}, {"_id": 0}) if coll_name == "expenses" else None
         if old and old.get("order_id"):
             raise HTTPException(400, "A viagem vinculada a um pedido não pode ser excluída por aqui")
+        if coll_name == "vendors" and await db.users.find_one({"vendor_id": item_id}):
+            raise HTTPException(400, "Desvincule o vendedor da conta de acesso antes de excluí-lo")
         res = await db[coll_name].delete_one({"id": item_id})
         if old and old.get("type") == "VIAGEM":
             await _change_vehicle_km(old.get("vehicle_id"), -float(old.get("km") or 0))
@@ -797,6 +821,13 @@ async def list_users(user: dict = Depends(get_current_user)):
 async def create_user(payload: UserCreate, user: dict = Depends(require_admin)):
     if payload.role not in ("admin", "vendedor", "visualizador"):
         raise HTTPException(400, "Perfil inválido")
+    if payload.vendor_id:
+        if payload.role != "vendedor":
+            raise HTTPException(400, "Somente usuários vendedores podem ser vinculados a um vendedor")
+        if not await db.vendors.find_one({"id": payload.vendor_id}):
+            raise HTTPException(400, "Vendedor não encontrado")
+        if await db.users.find_one({"vendor_id": payload.vendor_id, "role": "vendedor"}):
+            raise HTTPException(400, "Este vendedor já está vinculado a outro usuário")
     existing = await db.users.find_one({"email": payload.email.lower()})
     if existing:
         raise HTTPException(400, "Email já cadastrado")
@@ -805,6 +836,7 @@ async def create_user(payload: UserCreate, user: dict = Depends(require_admin)):
         "email": payload.email.lower(),
         "name": payload.name,
         "role": payload.role,
+        "vendor_id": (payload.vendor_id or None) if payload.role == "vendedor" else None,
         "pending": payload.role == "visualizador",
         "password_hash": hash_pw(payload.password),
         "created_at": now_iso(),
@@ -816,9 +848,20 @@ async def create_user(payload: UserCreate, user: dict = Depends(require_admin)):
 
 @api.put("/auth/users/{uid}")
 async def update_user(uid: str, payload: dict, user: dict = Depends(require_admin)):
-    upd = {k: v for k, v in payload.items() if k in ("name", "role", "email")}
+    upd = {k: v for k, v in payload.items() if k in ("name", "role", "email", "vendor_id")}
     if "role" in upd and upd["role"] not in ("admin", "vendedor", "visualizador"):
         raise HTTPException(400, "Perfil inválido")
+    target_user = await db.users.find_one({"id": uid}, {"_id": 0, "role": 1})
+    if not target_user:
+        raise HTTPException(404, "Usuário não encontrado")
+    target_role = upd.get("role", target_user.get("role"))
+    if "vendor_id" in upd and upd["vendor_id"]:
+        if target_role != "vendedor":
+            raise HTTPException(400, "Somente usuários vendedores podem ser vinculados a um vendedor")
+        if not await db.vendors.find_one({"id": upd["vendor_id"]}):
+            raise HTTPException(400, "Vendedor não encontrado")
+        if await db.users.find_one({"vendor_id": upd["vendor_id"], "role": "vendedor", "id": {"$ne": uid}}):
+            raise HTTPException(400, "Este vendedor já está vinculado a outro usuário")
     if "email" in upd:
         upd["email"] = str(upd["email"]).lower()
         duplicate = await db.users.find_one({"email": upd["email"], "id": {"$ne": uid}})
@@ -826,6 +869,8 @@ async def update_user(uid: str, payload: dict, user: dict = Depends(require_admi
             raise HTTPException(400, "E-mail já cadastrado")
     if "role" in upd:
         upd["pending"] = upd["role"] == "visualizador"
+        if upd["role"] != "vendedor":
+            upd["vendor_id"] = None
     if payload.get("password"):
         if len(payload["password"]) < 8:
             raise HTTPException(400, "A senha deve ter pelo menos 8 caracteres")
@@ -1280,6 +1325,32 @@ async def _validate_order_stock(order: dict):
             raise HTTPException(400, f"Tamanho não cadastrado para {product.get('name')}")
     return products_by_id
 
+async def _snapshot_order_commissions(items: list, previous_items: Optional[list] = None) -> list:
+    product_ids = list(dict.fromkeys(item.get("product_id") for item in items if item.get("product_id")))
+    products = await db.products.find(
+        {"id": {"$in": product_ids}},
+        {"_id": 0, "id": 1, "commission": 1},
+    ).to_list(len(product_ids)) if product_ids else []
+    product_commissions = {
+        product["id"]: float(product.get("commission", 1) if product.get("commission") is not None else 1)
+        for product in products
+    }
+
+    previous_commissions = {}
+    for item in previous_items or []:
+        key = (item.get("product_id"), item.get("size"))
+        previous_commissions.setdefault(key, []).append(item.get("commission_value"))
+
+    snapshots = []
+    for item in items:
+        key = (item.get("product_id"), item.get("size"))
+        prior_values = previous_commissions.get(key, [])
+        commission = prior_values.pop(0) if prior_values else None
+        if commission is None:
+            commission = product_commissions.get(item.get("product_id"), 1)
+        snapshots.append({**item, "commission_value": float(commission)})
+    return snapshots
+
 async def _apply_order_stock(order: dict):
     """Decrement stock for VENDA/TROCA out items; add for DEVOLUCAO/returned items."""
     products_by_id = await _validate_order_stock(order)
@@ -1503,8 +1574,15 @@ def _order_is_fulfilled(order: dict) -> bool:
 
 def _stock_relevant_order_fields(order: dict) -> dict:
     return {
-        key: order.get(key)
-        for key in ("type", "items", "returned_items")
+        "type": order.get("type"),
+        "items": [
+            {key: item.get(key) for key in ("product_id", "size", "qty")}
+            for item in order.get("items", [])
+        ],
+        "returned_items": [
+            {key: item.get(key) for key in ("product_id", "size", "qty")}
+            for item in order.get("returned_items", [])
+        ],
     }
 
 @api.get("/orders")
@@ -1522,10 +1600,21 @@ async def get_order(oid: str, user: dict = Depends(get_current_user)):
 
 @api.post("/orders")
 async def create_order(payload: dict, user: dict = Depends(get_current_user)):
+    assigned_vendor_id = user.get("vendor_id") if user.get("role") == "vendedor" else None
+    assigned_vendor = None
+    if assigned_vendor_id:
+        assigned_vendor = await db.vendors.find_one({"id": assigned_vendor_id}, {"_id": 0, "name": 1})
+        if not assigned_vendor:
+            raise HTTPException(400, "O vendedor vinculado a este usuário não existe mais")
     if payload.get("items") or payload.get("returned_items"):
         await _validate_order_stock(payload)
+    if payload.get("items"):
+        payload["items"] = await _snapshot_order_commissions(payload["items"])
     payload["number"] = await _next_order_number()
-    if not payload.get("vendor_id"):
+    if assigned_vendor_id:
+        payload["vendor_id"] = assigned_vendor_id
+        payload["vendor_name"] = assigned_vendor["name"]
+    elif not payload.get("vendor_id"):
         payload["vendor_id"] = user["id"]
         payload["vendor_name"] = user.get("name")
     # compute totals
@@ -1575,6 +1664,9 @@ async def _update_order(oid: str, payload: dict, user: dict, allow_fulfillment: 
     candidate = {**old, **payload}
     if "items" in payload or "returned_items" in payload:
         await _validate_order_stock(candidate)
+    if "items" in payload:
+        payload["items"] = await _snapshot_order_commissions(items, old.get("items", []))
+        candidate = {**old, **payload}
     stock_fields_changed_before_update = (
         _stock_relevant_order_fields(old) != _stock_relevant_order_fields(candidate)
     )
@@ -1605,11 +1697,12 @@ async def _update_order(oid: str, payload: dict, user: dict, allow_fulfillment: 
     doc = await db.orders.find_one({"id": oid}, {"_id": 0})
     await _sync_order_stock_to_status(doc)
     doc = await db.orders.find_one({"id": oid}, {"_id": 0})
-    # Commissions start when a sale is approved; stock moves only on delivery or pickup.
-    was_active = old.get("status") in ACTIVE_STATUSES
-    now_active = doc.get("status") in ACTIVE_STATUSES
-    if (not was_active) and now_active and doc.get("type") == "VENDA":
+    if doc.get("type") == "VENDA":
         await _record_commission(doc)
+    elif doc.get("type") in ("TROCA", "DEVOLUCAO"):
+        original_order = await db.orders.find_one({"id": doc.get("original_order_id")}, {"_id": 0})
+        if original_order and original_order.get("type") == "VENDA":
+            await _record_commission(original_order)
     return doc
 
 @api.put("/orders/{oid}")
@@ -1711,23 +1804,74 @@ async def delete_order(oid: str, user: dict = Depends(get_current_user)):
         await db.expenses.delete_many({"order_id": oid, "type": "VIAGEM"})
     await db.orders.delete_one({"id": oid})
     await db.commissions.delete_many({"order_id": oid})
+    if order.get("type") in ("TROCA", "DEVOLUCAO") and order.get("original_order_id"):
+        original_order = await db.orders.find_one({"id": order["original_order_id"]}, {"_id": 0})
+        if original_order and original_order.get("type") == "VENDA":
+            await _record_commission(original_order)
     await _rollback_order_number_if_latest(order)
     return {"deleted": 1}
 
 # ---------- Commissions ----------
 async def _record_commission(order: dict):
     exists = await db.commissions.find_one({"order_id": order["id"]})
-    if exists:
+    if order.get("status") not in ACTIVE_STATUSES:
+        if exists:
+            await db.commissions.update_one(
+                {"id": exists["id"]},
+                {"$set": {"items_count": 0, "amount": 0}},
+            )
         return
-    items_count = int(sum(float(it.get("qty", 1)) for it in order.get("items", [])))
+
+    items = order.get("items", [])
+    returned_order_ids = []
+    if _order_is_fulfilled(order):
+        returned_order_ids.append(order["id"])
+        linked_returns = await db.orders.find(
+            {
+                "original_order_id": order["id"],
+                "type": {"$in": ["TROCA", "DEVOLUCAO"]},
+            },
+            {"_id": 0, "id": 1},
+        ).to_list(5000)
+        returned_order_ids.extend(item["id"] for item in linked_returns)
+
+    returned_quantities = {}
+    if returned_order_ids:
+        movements = await db.stock_movements.find(
+            {"order_id": {"$in": returned_order_ids}, "kind": "ENTRADA"},
+            {"_id": 0, "product_id": 1, "size": 1, "qty": 1},
+        ).to_list(10000)
+        for movement in movements:
+            key = (movement.get("product_id"), movement.get("size"))
+            returned_quantities[key] = returned_quantities.get(key, 0) + float(movement.get("qty", 0))
+
+    commission_items = 0
+    amount = 0.0
+    for item in items:
+        quantity = max(float(item.get("qty", 1)), 0)
+        key = (item.get("product_id"), item.get("size"))
+        returned_quantity = min(quantity, returned_quantities.get(key, 0))
+        returned_quantities[key] = max(returned_quantities.get(key, 0) - returned_quantity, 0)
+        kept_quantity = quantity - returned_quantity
+        commission_items += kept_quantity
+        commission_value = float(item.get("commission_value", 1))
+        amount += kept_quantity * commission_value
+
+    values = {
+        "items_count": int(commission_items),
+        "amount": round(amount, 2),
+    }
+    if exists:
+        await db.commissions.update_one({"id": exists["id"]}, {"$set": values})
+        return
+
     com = {
         "id": new_id(),
         "order_id": order["id"],
         "order_number": order.get("number", 0),
         "vendor_id": order.get("vendor_id"),
         "vendor_name": order.get("vendor_name"),
-        "items_count": items_count,
-        "amount": float(items_count),
+        **values,
         "paid": False,
         "created_at": now_iso(),
     }
@@ -1776,6 +1920,39 @@ async def update_settings(payload: dict, user: dict = Depends(get_current_user))
     await db.settings.update_one({"id": "singleton"}, {"$set": payload}, upsert=True)
     return await db.settings.find_one({"id": "singleton"}, {"_id": 0})
 
+@api.get("/dashboard/events")
+async def list_dashboard_events(user: dict = Depends(get_current_user)):
+    return await db.dashboard_events.find({}, {"_id": 0}).sort(
+        [("event_date", -1), ("created_at", -1)]
+    ).to_list(500)
+
+@api.post("/dashboard/events")
+async def create_dashboard_event(payload: DashboardEventCreate, user: dict = Depends(require_admin)):
+    title = payload.title.strip()
+    if not title:
+        raise HTTPException(400, "Informe o título do evento")
+    try:
+        datetime.strptime(payload.event_date, "%Y-%m-%d")
+    except ValueError as exc:
+        raise HTTPException(400, "Informe uma data válida") from exc
+    doc = {
+        "id": new_id(),
+        "title": title,
+        "description": payload.description.strip(),
+        "event_date": payload.event_date,
+        "created_at": now_iso(),
+        "created_by": user.get("name", ""),
+    }
+    await db.dashboard_events.insert_one(doc)
+    return strip_mongo(doc)
+
+@api.delete("/dashboard/events/{event_id}")
+async def delete_dashboard_event(event_id: str, user: dict = Depends(require_admin)):
+    result = await db.dashboard_events.delete_one({"id": event_id})
+    if result.deleted_count == 0:
+        raise HTTPException(404, "Evento não encontrado")
+    return {"deleted": result.deleted_count}
+
 async def _delete_count(collection_name: str, query: Optional[dict] = None) -> int:
     result = await db[collection_name].delete_many(query or {})
     return result.deleted_count
@@ -1799,6 +1976,7 @@ async def _data_reset_counts() -> dict:
         "expenses": await db.expenses.count_documents({}),
         "vendors": await db.vendors.count_documents({}),
         "day_closures": await db.day_closures.count_documents({}),
+        "dashboard_events": await db.dashboard_events.count_documents({}),
         "order_ids": order_ids,
     }
 
@@ -1820,6 +1998,7 @@ async def data_reset_options(user: dict = Depends(require_admin)):
             {"id": "expenses", "label": RESET_GROUPS["expenses"], "count": counts["expenses"]},
             {"id": "vendors", "label": RESET_GROUPS["vendors"], "count": counts["vendors"]},
             {"id": "day_closures", "label": RESET_GROUPS["day_closures"], "count": counts["day_closures"]},
+            {"id": "dashboard_events", "label": RESET_GROUPS["dashboard_events"], "count": counts["dashboard_events"]},
         ],
     }
 
@@ -1855,8 +2034,11 @@ async def reset_data(payload: DataResetInput, user: dict = Depends(require_admin
         ("vehicles", "vehicles"),
         ("vendors", "vendors"),
         ("day_closures", "day_closures"),
+        ("dashboard_events", "dashboard_events"),
     ):
         if group in selected:
+            if group == "vendors":
+                await db.users.update_many({"vendor_id": {"$exists": True}}, {"$set": {"vendor_id": None}})
             deleted[collection] = await _delete_count(collection)
 
     if "expenses" in selected:

@@ -7,7 +7,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sh
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import useSubmitLock from "@/hooks/useSubmitLock";
 
-const BLANK = { name: "", sku: "", category_id: "", subcategory_id: "", color: "", brand: "", shelf: "", cost: 0, price: 0, sizes: [], linked_ids: [], photo: "", photo_url: "" };
+const BLANK = { name: "", sku: "", category_id: "", subcategory_id: "", color: "", brand: "", shelf: "", cost: 0, price: 0, commission: 1, sizes: [], linked_ids: [], photo: "", photo_url: "" };
 
 const Field = ({ label, children, wide }) => (
   <label className={`block ${wide ? "md:col-span-2" : ""}`}><div className="font-head text-[11px] text-neutral-600 mb-1">{label}</div>{children}</label>
@@ -288,6 +288,7 @@ export default function Products() {
             <option value="stock">Ordenar por estoque</option>
             <option value="cost">Ordenar por custo</option>
             <option value="price">Ordenar por preço</option>
+            <option value="commission">Ordenar por comissão</option>
             <option value="shelf">Ordenar por prateleira</option>
           </select>
         </label>
@@ -304,7 +305,7 @@ export default function Products() {
 
       <div className="lm-table-wrap overflow-x-auto">
         <table className="lm-table">
-          <thead><tr><th></th><th>Produto</th><th>Categoria</th><th>Estoque por tamanho</th><th>Total</th><th>Custo</th><th>Venda</th><th>Prat.</th><th></th></tr></thead>
+          <thead><tr><th></th><th>Produto</th><th>Categoria</th><th>Estoque por tamanho</th><th>Total</th><th>Custo</th><th>Venda</th><th>Comissão</th><th>Prat.</th><th></th></tr></thead>
           <tbody>
             {filtered.map((p) => {
               const parents = parentsOf(p.id);
@@ -324,6 +325,7 @@ export default function Products() {
                   <td className="font-head font-bold text-base">{(p.sizes || []).reduce((s, x) => s + Number(x.stock || 0), 0)}</td>
                   <td className="whitespace-nowrap">{formatBRL(p.cost)}</td>
                   <td className="whitespace-nowrap">{formatBRL(p.price)}</td>
+                  <td className="whitespace-nowrap">{formatBRL(p.commission ?? 1)}</td>
                   <td>{p.shelf}</td>
                   <td className="whitespace-nowrap">
                     {(p.linked_ids || []).length > 0 && <>
@@ -401,6 +403,7 @@ export default function Products() {
                 <Field label="Marca"><input className="lm-input" value={editing.brand || ""} onChange={(e) => setEditing({ ...editing, brand: e.target.value })} data-testid="p-brand" /></Field>
                 <Field label="Custo (R$)"><input type="number" step="0.01" className="lm-input" value={editing.cost} onChange={(e) => setEditing({ ...editing, cost: Number(e.target.value) })} data-testid="p-cost" /></Field>
                 <Field label="Venda (R$)"><input type="number" step="0.01" className="lm-input" value={editing.price} onChange={(e) => setEditing({ ...editing, price: Number(e.target.value) })} data-testid="p-price" /></Field>
+                <Field label="Comissão por unidade (R$)"><input type="number" min="0" step="0.01" className="lm-input" value={editing.commission ?? 1} onChange={(e) => setEditing({ ...editing, commission: Number(e.target.value) })} data-testid="p-commission" /></Field>
                 <Field label="Prateleira"><input className="lm-input" value={editing.shelf || ""} onChange={(e) => setEditing({ ...editing, shelf: e.target.value })} data-testid="p-shelf" /></Field>
               </div>
 

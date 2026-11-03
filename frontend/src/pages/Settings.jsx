@@ -262,6 +262,16 @@ function DashboardSection({ categories, initialPreferences, onSave, onChange, sa
         Cor do texto dos cartões do Dashboard
       </label>
 
+      <label className="flex items-center gap-2 text-sm">
+        <input
+          type="checkbox"
+          checked={preferences.show_announcements}
+          onChange={(event) => update({ show_announcements: event.target.checked })}
+          data-testid="dashboard-announcements-visible"
+        />
+        Mostrar o quadro de avisos quando o gráfico estiver oculto
+      </label>
+
       <div className="grid md:grid-cols-2 gap-3">
         <label className="text-sm">Tipo de gráfico
           <select className="lm-input mt-1" value={preferences.chart_type} onChange={(event) => update({ chart_type: event.target.value })} data-testid="dashboard-chart-type">
@@ -299,8 +309,9 @@ export default function Settings() {
   const { run: withSubmitLock, isPending } = useSubmitLock();
   const [s, setS] = useState(null);
   const [users, setUsers] = useState([]);
+  const [vendors, setVendors] = useState([]);
   const [categories, setCategories] = useState([]);
-  const [nu, setNu] = useState({ name: "", email: "", password: "", role: "visualizador" });
+  const [nu, setNu] = useState({ name: "", email: "", password: "", role: "visualizador", vendor_id: "" });
   const [userEdits, setUserEdits] = useState({});
   const [passwordChange, setPasswordChange] = useState({ current_password: "", new_password: "" });
   const [invitations, setInvitations] = useState([]);
@@ -318,7 +329,7 @@ export default function Settings() {
   const loadUsers = () => api.get("/auth/users").then((r) => {
     setUsers(r.data);
     setUserEdits(Object.fromEntries(r.data.map((item) => [item.id, {
-      email: item.email, role: item.role, password: "",
+      email: item.email, role: item.role, vendor_id: item.vendor_id || "", password: "",
     }])));
   });
   const loadInvitations = () => api.get("/auth/invitations").then((r) => setInvitations(r.data)).catch((error) => {
@@ -338,6 +349,9 @@ export default function Settings() {
     api.get("/categories").then((r) => setCategories(r.data));
     loadUsers();
     if (isAdmin) {
+      api.get("/vendors").then((response) => setVendors(response.data)).catch((error) => {
+        toast.error(error.response?.data?.detail || "Não foi possível carregar os vendedores");
+      });
       loadInvitations();
       loadResetOptions();
       loadDayBackups();
@@ -532,6 +546,7 @@ export default function Settings() {
       await api.put(`/auth/users/${id}`, {
         email: update.email,
         role: update.role,
+        vendor_id: update.role === "vendedor" ? update.vendor_id || null : null,
         ...(update.password ? { password: update.password } : {}),
       });
       toast.success("Usuário atualizado");
@@ -550,7 +565,7 @@ export default function Settings() {
     }
   });
   const addUser = () => withSubmitLock("add-user", async () => {
-    try { await api.post("/auth/users", nu); toast.success("Usuário criado"); setNu({ name: "", email: "", password: "", role: "visualizador" }); loadUsers(); }
+    try { await api.post("/auth/users", nu); toast.success("Usuário criado"); setNu({ name: "", email: "", password: "", role: "visualizador", vendor_id: "" }); loadUsers(); }
     catch (e) { toast.error(typeof e.response?.data?.detail === "string" ? e.response.data.detail : "Erro ao criar usuário"); }
   });
   const delUser = async (id) => { if (!window.confirm("Excluir usuário?")) return; await api.delete(`/auth/users/${id}`); loadUsers(); };
@@ -767,7 +782,7 @@ export default function Settings() {
         <h2 className="lokal-stencil text-sm mb-3">Usuários e vendedores</h2>
         <div className="overflow-x-auto">
         <table className="w-full text-sm table-mono mb-3">
-          <thead className="bg-neutral-100 text-[11px]"><tr><th className="p-2 text-left">NOME</th><th className="text-left">LOGIN / E-MAIL</th><th className="text-left">PERFIL</th>{isAdmin && <th className="text-left">NOVA SENHA</th>}<th></th></tr></thead>
+          <thead className="bg-neutral-100 text-[11px]"><tr><th className="p-2 text-left">NOME</th><th className="text-left">LOGIN / E-MAIL</th><th className="text-left">PERFIL</th>{isAdmin && <><th className="text-left">VENDEDOR VINCULADO</th><th className="text-left">NOVA SENHA</th></>}<th></th></tr></thead>
           <tbody>{users.map((u) => (
             <tr key={u.id} className="border-t">
               <td className="p-2">{u.name}{u.pending && <span className="block text-[10px] text-amber-700">Aguardando privilégios</span>}</td>
@@ -777,6 +792,17 @@ export default function Settings() {
                 onChange={(e) => setUserEdits({ ...userEdits, [u.id]: { ...userEdits[u.id], role: e.target.value } })} aria-label={`Privilégios de ${u.name}`}>
                 <option value="visualizador">Somente visualização</option><option value="vendedor">Vendedor</option><option value="admin">Administrador</option>
               </select> : u.role}</td>
+              {isAdmin && <td><select
+                className="border px-2 py-1 text-sm min-w-40"
+                value={userEdits[u.id]?.vendor_id || ""}
+                disabled={(userEdits[u.id]?.role || u.role) !== "vendedor"}
+                onChange={(e) => setUserEdits({ ...userEdits, [u.id]: { ...userEdits[u.id], vendor_id: e.target.value } })}
+                aria-label={`Vendedor vinculado a ${u.name}`}
+                data-testid={`user-vendor-${u.id}`}
+              >
+                <option value="">— Nenhum —</option>
+                {vendors.map((vendor) => <option key={vendor.id} value={vendor.id}>{vendor.name}</option>)}
+              </select></td>}
               {isAdmin && <td><input className="border px-2 py-1 text-sm min-w-40" type="password" placeholder="Opcional · mínimo 8"
                 value={userEdits[u.id]?.password || ""} onChange={(e) => setUserEdits({ ...userEdits, [u.id]: { ...userEdits[u.id], password: e.target.value } })} aria-label={`Nova senha de ${u.name}`} /></td>}
               <td className="whitespace-nowrap">{isAdmin && <>
@@ -789,13 +815,17 @@ export default function Settings() {
         </table>
         </div>
         {isAdmin ? (
-          <div className="grid md:grid-cols-5 gap-2">
+          <div className="grid md:grid-cols-6 gap-2">
             <input className="border px-2 py-1.5 text-sm" placeholder="Nome" value={nu.name} onChange={(e) => setNu({ ...nu, name: e.target.value })} data-testid="nu-name" />
             <input className="border px-2 py-1.5 text-sm" placeholder="E-mail" value={nu.email} onChange={(e) => setNu({ ...nu, email: e.target.value })} data-testid="nu-email" />
             <input className="border px-2 py-1.5 text-sm" type="password" placeholder="Senha" value={nu.password} onChange={(e) => setNu({ ...nu, password: e.target.value })} data-testid="nu-password" />
             <select className="border px-2 py-1.5 text-sm" value={nu.role} onChange={(e) => setNu({ ...nu, role: e.target.value })} data-testid="nu-role">
               <option value="visualizador">Somente visualização</option><option value="vendedor">Vendedor</option><option value="admin">Admin</option>
             </select>
+            {nu.role === "vendedor" && <select className="border px-2 py-1.5 text-sm" value={nu.vendor_id} onChange={(e) => setNu({ ...nu, vendor_id: e.target.value })} aria-label="Vendedor vinculado ao novo usuário" data-testid="nu-vendor">
+              <option value="">— Vincular vendedor —</option>
+              {vendors.map((vendor) => <option key={vendor.id} value={vendor.id}>{vendor.name}</option>)}
+            </select>}
             <button className="lokal-btn-primary" onClick={addUser} disabled={isPending("add-user")} data-testid="nu-save">
               {isPending("add-user") ? "ADICIONANDO..." : "ADICIONAR"}
             </button>

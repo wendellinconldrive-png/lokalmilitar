@@ -149,7 +149,7 @@ export default function Commissions() {
       ["Pedido", "Data", "Vendedor", "Cliente", "Status", "Itens", "Comissão", "Situação"],
       ...tableRows,
       [],
-      ["Movimentações de estoque vinculadas a pedidos (não alteram o valor da comissão)"],
+      ["Movimentações de estoque vinculadas a pedidos (devoluções reduzem as unidades comissionáveis)"],
       ["Pedido", "Data", "Vendedor", "Cliente", "Produto", "Tamanho", "Movimento", "Quantidade", "Tipo", "Motivo"],
       ...movementRows,
     ]
@@ -166,7 +166,7 @@ export default function Commissions() {
       <table><thead><tr><th>Pedido</th><th>Data</th><th>Vendedor</th><th>Cliente</th><th>Status</th><th>Itens</th><th>Comissão</th><th>Situação</th></tr></thead>
       <tbody>${tableRows.map((r) => `<tr>${r.map((v, i) => `<td>${escapeHtml(i === 6 ? formatBRL(v) : v)}</td>`).join("")}</tr>`).join("")}</tbody></table>
       <h3 style="text-align:right">Itens: ${items} · Total: ${formatBRL(total)} · Pendente: ${formatBRL(pending.reduce((s, r) => s + r.amount, 0))}</h3>
-      <h2>Movimentações de estoque vinculadas a pedidos (não alteram o valor da comissão)</h2>
+      <h2>Movimentações de estoque vinculadas a pedidos (devoluções reduzem as unidades comissionáveis)</h2>
       <table><thead><tr><th>Pedido</th><th>Data</th><th>Vendedor</th><th>Cliente</th><th>Produto</th><th>Tamanho</th><th>Movimento</th><th>Quantidade</th><th>Tipo</th><th>Motivo</th></tr></thead>
       <tbody>${movementRows.map((r) => `<tr>${r.map((value) => `<td>${escapeHtml(value)}</td>`).join("")}</tr>`).join("")}</tbody></table>
       <script>window.onload=()=>window.print()</script></body></html>`);
@@ -176,7 +176,7 @@ export default function Commissions() {
   return (
     <div data-testid="commissions-page">
       <div className="lm-page-head flex items-end justify-between gap-3 flex-wrap">
-        <div><h1>Comissões</h1><p>R$ 1,00 por produto vendido (pedidos Aprovado, Separado ou Entregue)</p></div>
+        <div><h1>Comissões</h1><p>Comissão por unidade configurada em cada produto; devoluções ao estoque reduzem o valor comissionável.</p></div>
         <div className="flex gap-2 flex-wrap">
           <button className="lm-btn lm-btn-outline" onClick={exportExcel} data-testid="com-excel"><FileSpreadsheet size={15} />Excel</button>
           <button className="lm-btn lm-btn-dark" onClick={printReport} data-testid="com-print"><Printer size={15} />Imprimir relatório de comissão</button>
@@ -229,7 +229,7 @@ export default function Commissions() {
       <section className="mt-6 space-y-2" data-testid="commission-stock-movements">
         <div>
           <h2 className="font-head text-lg font-semibold">Movimentações de estoque vinculadas a pedidos</h2>
-          <p className="text-xs text-neutral-500">Entradas e saídas de produtos, inclusive trocas e devoluções. Estes registros não alteram o cálculo nem o pagamento da comissão.</p>
+          <p className="text-xs text-neutral-500">Entradas e saídas vinculadas a pedidos. Produtos devolvidos ao estoque são descontados da comissão da venda original.</p>
         </div>
         <div className="lm-table-wrap overflow-x-auto">
           <table className="lm-table">

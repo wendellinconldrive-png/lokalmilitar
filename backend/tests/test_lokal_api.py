@@ -550,6 +550,80 @@ class TestOrders:
         coms = [c for c in admin.get(f"{BASE_URL}/api/commissions").json() if c["order_id"] == o["id"]]
         assert len(coms) == 1 and coms[0]["amount"] == 3
 
+    def test_product_commission_and_linked_return_reduce_commission(self, admin):
+        product = _prod(
+            admin,
+            "TEST_Comissao_Devolucao",
+            [{"size": "M", "stock": 10}],
+            commission=2.5,
+        )
+        sale_response = admin.post(
+            f"{BASE_URL}/api/orders",
+            json={
+                "customer_name": "TEST_Comissao",
+                "status": "Aprovado",
+                "type": "VENDA",
+                "items": [{
+                    "product_id": product["id"],
+                    "name": product["name"],
+                    "size": "M",
+                    "qty": 3,
+                    "unit_price": 10,
+                }],
+            },
+        )
+        assert sale_response.status_code == 200, sale_response.text
+        sale = sale_response.json()
+        CREATED["orders"].append(sale["id"])
+        assert sale["items"][0]["commission_value"] == 2.5
+        commission = next(
+            item for item in admin.get(f"{BASE_URL}/api/commissions").json()
+            if item["order_id"] == sale["id"]
+        )
+        assert commission["amount"] == 7.5
+        assert commission["items_count"] == 3
+
+        fulfillment = admin.post(
+            f"{BASE_URL}/api/orders/{sale['id']}/fulfill",
+            json={"delivery_type": "RETIRADA"},
+        )
+        assert fulfillment.status_code == 200, fulfillment.text
+        exchange_response = admin.post(
+            f"{BASE_URL}/api/orders",
+            json={
+                "type": "TROCA",
+                "status": "Aprovado",
+                "customer_name": "TEST_Comissao",
+                "original_order_id": sale["id"],
+                "returned_items": [{
+                    "product_id": product["id"],
+                    "name": product["name"],
+                    "size": "M",
+                    "qty": 1,
+                    "reason": "TEST_Devolução",
+                }],
+            },
+        )
+        assert exchange_response.status_code == 200, exchange_response.text
+        exchange = exchange_response.json()
+        CREATED["orders"].append(exchange["id"])
+        exchange_fulfillment = admin.post(
+            f"{BASE_URL}/api/orders/{exchange['id']}/fulfill",
+            json={"delivery_type": "RETIRADA"},
+        )
+        assert exchange_fulfillment.status_code == 200, exchange_fulfillment.text
+
+        updated_commission = next(
+            item for item in admin.get(f"{BASE_URL}/api/commissions").json()
+            if item["order_id"] == sale["id"]
+        )
+        assert updated_commission["amount"] == 5
+        assert updated_commission["items_count"] == 2
+        assert not [
+            item for item in admin.get(f"{BASE_URL}/api/commissions").json()
+            if item["order_id"] == exchange["id"]
+        ]
+
     def test_vendor_signatures_are_only_returned_by_detail_endpoint(self, admin):
         signature = "data:image/png;base64,Zm9v"
         created = admin.post(
@@ -1196,6 +1270,66 @@ def test_dashboard(admin):
     for k in ("totals_by_cat", "orders_today", "pending", "chart", "low_stock", "commission_month"):
         assert k in d
     assert "Fardamento" in d["totals_by_cat"] and len(d["chart"]) == 7
+
+
+def test_vendor_login_assignment(admin):
+    vendor_response = admin.post(
+        f"{BASE_URL}/api/vendors",
+        json={"name": f"TEST_Vendedor_{uuid.uuid4().hex[:6]}"},
+    )
+    assert vendor_response.status_code == 200, vendor_response.text
+    vendor_id = vendor_response.json()["id"]
+    user_id = None
+    try:
+        user_response = admin.post(
+            f"{BASE_URL}/api/auth/users",
+            json={
+                "email": f"test_vinculo_{uuid.uuid4().hex[:6]}@lokal.com",
+                "password": "seller1234",
+                "name": "TEST_Vendedor_Login",
+                "role": "vendedor",
+                "vendor_id": vendor_id,
+            },
+        )
+        assert user_response.status_code == 200, user_response.text
+        user_id = user_response.json()["id"]
+        assert user_response.json()["vendor_id"] == vendor_id
+
+        duplicate_response = admin.post(
+            f"{BASE_URL}/api/auth/users",
+            json={
+                "email": f"test_vinculo_dup_{uuid.uuid4().hex[:6]}@lokal.com",
+                "password": "seller1234",
+                "name": "TEST_Vendedor_Duplicado",
+                "role": "vendedor",
+                "vendor_id": vendor_id,
+            },
+        )
+        assert duplicate_response.status_code == 400
+    finally:
+        if user_id:
+            admin.delete(f"{BASE_URL}/api/auth/users/{user_id}")
+        admin.delete(f"{BASE_URL}/api/vendors/{vendor_id}")
+
+
+def test_dashboard_event_flow(admin):
+    response = admin.post(
+        f"{BASE_URL}/api/dashboard/events",
+        json={
+            "title": f"TEST_Evento_{uuid.uuid4().hex[:6]}",
+            "description": "Aviso de teste",
+            "event_date": "2030-01-02",
+        },
+    )
+    assert response.status_code == 200, response.text
+    event = response.json()
+    try:
+        assert event["event_date"] == "2030-01-02"
+        events_response = admin.get(f"{BASE_URL}/api/dashboard/events")
+        assert events_response.status_code == 200, events_response.text
+        assert event["id"] in {item["id"] for item in events_response.json()}
+    finally:
+        admin.delete(f"{BASE_URL}/api/dashboard/events/{event['id']}")
 
 
 def test_day_close_is_saved_and_idempotent(admin):
