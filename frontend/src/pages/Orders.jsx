@@ -1145,7 +1145,7 @@ export default function Orders({ mode }) {
           </div>
         </div>
       )}
-      <style>{`.input{width:100%;border:1px solid #ccc;padding:6px 8px;border-radius:2px;font-size:13px}`}</style>
+      <style>{`.input:not(.lm-search-input){width:100%;border:1px solid #ccc;padding:6px 8px;border-radius:2px;font-size:13px}`}</style>
     </div>
   );
 }
