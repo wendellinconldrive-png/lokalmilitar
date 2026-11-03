@@ -340,13 +340,52 @@ export function Viagens() {
 }
 
 export function Manutencao() {
+  const [vehicles, setVehicles] = useState([]);
+  const [services, setServices] = useState([]);
+  useEffect(() => {
+    Promise.all([api.get("/vehicles"), api.get("/expenses")])
+      .then(([vehicleResponse, expenseResponse]) => {
+        setVehicles(vehicleResponse.data);
+        setServices([...new Set(expenseResponse.data
+          .filter((expense) => expense.type === "MANUTENCAO")
+          .map((expense) => expense.description?.trim())
+          .filter(Boolean))]);
+      })
+      .catch(() => toast.error("Não foi possível carregar veículos e serviços anteriores"));
+  }, []);
+  const serviceSuggestions = (editing) => {
+    const query = String(editing.description || "").trim().toLocaleLowerCase();
+    return services.filter((service) => !query || service.toLocaleLowerCase().includes(query));
+  };
+  const vehicleOptions = (editing) => vehicles
+    .filter((vehicle) => vehicle.active !== false || vehicle.id === editing.vehicle_id)
+    .map((vehicle) => ({
+      value: vehicle.id,
+      label: [vehicle.name, vehicle.model, vehicle.plate].filter(Boolean).join(" · "),
+    }));
+  const updateVehicleDetails = (vehicleId) => {
+    const vehicle = vehicles.find((item) => item.id === vehicleId);
+    return {
+      vehicle_id: vehicleId,
+      vehicle_model: vehicle ? [vehicle.name, vehicle.model].filter(Boolean).join(" · ") : "",
+      plate: vehicle?.plate || "",
+      km: vehicle?.current_km ?? "",
+    };
+  };
   return (
     <CrudPage title="Manutenção Veículo" subtitle="Revisões, trocas de óleo, pneus e reparos" endpoint="expenses" testid="manutencao"
       filter={(r) => r.type === "MANUTENCAO"} defaults={{ type: "MANUTENCAO", date: new Date().toISOString().slice(0, 10) }}
+      onSaved={(maintenance) => {
+        const service = maintenance.description?.trim();
+        if (service) setServices((previous) => previous.includes(service) ? previous : [...previous, service]);
+      }}
       fields={[
-        { key: "description", label: "Serviço", required: true, wide: true },
-        { key: "vehicle_model", label: "Veículo / Modelo" }, { key: "plate", label: "Placa" },
-        { key: "km", label: "KM atual", type: "number" }, { key: "amount", label: "Valor (R$)", type: "number", required: true },
+        { key: "description", label: "Serviço", required: true, wide: true, suggestions: serviceSuggestions },
+        { key: "vehicle_id", label: "Veículo cadastrado", type: "select", required: true, options: vehicleOptions, onChange: updateVehicleDetails },
+        { key: "vehicle_model", label: "Veículo / Modelo", readOnly: true },
+        { key: "plate", label: "Placa", readOnly: true },
+        { key: "km", label: "KM atual", type: "number", readOnly: true },
+        { key: "amount", label: "Valor (R$)", type: "number", required: true },
         { key: "date", label: "Data", type: "date" }, { key: "next_review_date", label: "Próxima revisão", type: "date" },
       ]}
       columns={[

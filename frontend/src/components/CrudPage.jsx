@@ -5,7 +5,7 @@ import { Plus, Edit, Trash2 } from "lucide-react";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import useSubmitLock from "@/hooks/useSubmitLock";
 
-export const CrudPage = ({ title, subtitle, endpoint, fields, columns, defaults = {}, filter, testid, footer, rowActions, prepareEdit, headerContent }) => {
+export const CrudPage = ({ title, subtitle, endpoint, fields, columns, defaults = {}, filter, testid, footer, rowActions, prepareEdit, headerContent, onSaved }) => {
   const [rows, setRows] = useState([]);
   const [editing, setEditing] = useState(null);
   const [search, setSearch] = useState("");
@@ -23,6 +23,7 @@ export const CrudPage = ({ title, subtitle, endpoint, fields, columns, defaults 
     try {
       if (payload.id) await api.put(`/${endpoint}/${payload.id}`, payload);
       else await api.post(`/${endpoint}`, payload);
+      onSaved?.(payload);
       toast.success("Registro salvo");
       setEditing(null); load();
     } catch (e) { toast.error(e.response?.data?.detail || "Erro ao salvar"); }
@@ -123,8 +124,19 @@ export const CrudPage = ({ title, subtitle, endpoint, fields, columns, defaults 
                   ) : f.type === "checkbox" ? (
                     <input className="crud-input" type="checkbox" checked={!!editing[f.key]} onChange={(e) => setEditing({ ...editing, ...(f.onChange ? f.onChange(e.target.checked, editing) : { [f.key]: e.target.checked }) })} data-testid={`field-${f.key}`} />
                   ) : (
-                    <input className="crud-input" type={f.type || "text"} step={f.type === "number" ? "0.01" : undefined} readOnly={f.readOnly}
-                      value={editing[f.key] ?? ""} onChange={(e) => setEditing({ ...editing, ...(f.onChange ? f.onChange(e.target.value, editing) : { [f.key]: e.target.value }) })} data-testid={`field-${f.key}`} />
+                    <>
+                      <input className="crud-input" type={f.type || "text"} step={f.type === "number" ? "0.01" : undefined}
+                        readOnly={typeof f.readOnly === "function" ? f.readOnly(editing) : f.readOnly}
+                        list={f.suggestions ? `crud-suggestions-${testid}-${f.key}` : undefined}
+                        value={editing[f.key] ?? ""} onChange={(e) => setEditing({ ...editing, ...(f.onChange ? f.onChange(e.target.value, editing) : { [f.key]: e.target.value }) })} data-testid={`field-${f.key}`} />
+                      {f.suggestions && (
+                        <datalist id={`crud-suggestions-${testid}-${f.key}`}>
+                          {(typeof f.suggestions === "function" ? f.suggestions(editing) : f.suggestions).map((suggestion) => (
+                            <option key={suggestion} value={suggestion} />
+                          ))}
+                        </datalist>
+                      )}
+                    </>
                   )}
                 </label>
               ))}

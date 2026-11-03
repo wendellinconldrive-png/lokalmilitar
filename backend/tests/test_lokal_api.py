@@ -1482,6 +1482,66 @@ def test_auto_endpoint_aliases_vehicle_crud(admin):
     assert admin.get(f"{BASE_URL}/api/vehicles/{vehicle['id']}").status_code == 404
 
 
+def test_vehicle_maintenance_uses_registered_vehicle_details(admin):
+    vehicle_response = admin.post(
+        f"{BASE_URL}/api/vehicles",
+        json={
+            "name": f"TEST_Manutencao_{uuid.uuid4().hex[:6]}",
+            "model": "Civic",
+            "plate": "ABC1D23",
+            "current_km": 48250,
+        },
+    )
+    assert vehicle_response.status_code == 200, vehicle_response.text
+    vehicle = vehicle_response.json()
+    CREATED["vehicles"].append(vehicle["id"])
+
+    maintenance_response = admin.post(
+        f"{BASE_URL}/api/expenses",
+        json={
+            "type": "MANUTENCAO",
+            "description": "Troca de óleo",
+            "amount": 250,
+            "vehicle_id": vehicle["id"],
+            "vehicle_model": "Dados digitados",
+            "plate": "ERRADA",
+            "km": 1,
+        },
+    )
+    assert maintenance_response.status_code == 200, maintenance_response.text
+    maintenance = maintenance_response.json()
+    CREATED["expenses"].append(maintenance["id"])
+    assert maintenance["vehicle_id"] == vehicle["id"]
+    assert maintenance["vehicle_model"] == f"{vehicle['name']} · Civic"
+    assert maintenance["plate"] == vehicle["plate"]
+    assert maintenance["km"] == vehicle["current_km"]
+
+    updated_vehicle = admin.put(
+        f"{BASE_URL}/api/vehicles/{vehicle['id']}",
+        json={"current_km": 50000},
+    )
+    assert updated_vehicle.status_code == 200, updated_vehicle.text
+
+    updated = admin.put(
+        f"{BASE_URL}/api/expenses/{maintenance['id']}",
+        json={"km": 2, "plate": "TROCADA"},
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["plate"] == vehicle["plate"]
+    assert updated.json()["km"] == vehicle["current_km"]
+
+    invalid_vehicle = admin.post(
+        f"{BASE_URL}/api/expenses",
+        json={
+            "type": "MANUTENCAO",
+            "description": "Serviço inválido",
+            "amount": 100,
+            "vehicle_id": "missing-vehicle",
+        },
+    )
+    assert invalid_vehicle.status_code == 400
+
+
 def test_reset_orders_preserves_settings_and_customers(admin):
     customer_response = admin.post(
         f"{BASE_URL}/api/customers",

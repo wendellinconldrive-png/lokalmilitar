@@ -189,6 +189,23 @@ async def _prepare_trip(doc: dict) -> dict:
         doc["fuel_cost"] = round(doc["fuel_liters"] * price, 2)
     return doc
 
+async def _prepare_maintenance(doc: dict) -> dict:
+    vehicle_id = doc.get("vehicle_id")
+    if not vehicle_id:
+        return doc
+    vehicle = await db.vehicles.find_one(
+        {"id": vehicle_id},
+        {"_id": 0},
+    )
+    if not vehicle:
+        raise HTTPException(400, "Veículo não encontrado")
+    doc["vehicle_model"] = " · ".join(
+        value for value in (vehicle.get("name"), vehicle.get("model")) if value
+    )
+    doc["plate"] = vehicle.get("plate") or ""
+    doc["km"] = float(vehicle.get("current_km") or 0)
+    return doc
+
 async def _change_vehicle_km(vehicle_id: Optional[str], delta: float, *, required: bool = False):
     if not vehicle_id or not delta:
         return
@@ -509,6 +526,8 @@ def make_crud(coll_name: str, Model, route_name: Optional[str] = None):
                 doc["remaining_quantity"] = max(float(doc.get("quantity") or 0), 0)
         if coll_name == "expenses" and doc.get("type") == "VIAGEM":
             doc = await _prepare_trip(doc)
+        if coll_name == "expenses" and doc.get("type") == "MANUTENCAO":
+            doc = await _prepare_maintenance(doc)
         await db[coll_name].insert_one(doc)
         if coll_name == "expenses" and doc.get("type") == "VIAGEM":
             await _change_vehicle_km(doc.get("vehicle_id"), float(doc.get("km") or 0), required=bool(doc.get("vehicle_id")))
@@ -554,6 +573,15 @@ def make_crud(coll_name: str, Model, route_name: Optional[str] = None):
             updated = {**old, **payload}
             if updated.get("type") == "VIAGEM":
                 updated = await _prepare_trip(updated)
+            if updated.get("type") == "MANUTENCAO" and (
+                old.get("type") != "MANUTENCAO"
+                or updated.get("vehicle_id") != old.get("vehicle_id")
+            ):
+                updated = await _prepare_maintenance(updated)
+            elif updated.get("type") == "MANUTENCAO":
+                for key in ("vehicle_model", "plate", "km"):
+                    if key in old:
+                        updated[key] = old[key]
             payload = {key: value for key, value in updated.items() if key != "id"}
         res = await db[coll_name].update_one({"id": item_id}, {"$set": payload})
         if res.matched_count == 0:
