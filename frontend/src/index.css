@@ -95,6 +95,9 @@ h1, h2, h3 { color: var(--title-color); }
   padding: 10px 14px; display: flex; justify-content: space-between; align-items: center;
 }
 .lokal-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
   background: var(--cream);
   border: 1px solid var(--line);
   border-radius: 6px;
