@@ -41,6 +41,7 @@ export const CrudPage = ({ title, subtitle, endpoint, fields, columns, defaults 
   };
 
   const shown = rows.filter((r) => !search || JSON.stringify(r).toLowerCase().includes(search.toLowerCase()));
+  const resolvedHeaderContent = typeof headerContent === "function" ? headerContent({ rows, shown }) : headerContent;
 
   return (
     <div data-testid={testid}>
@@ -53,7 +54,7 @@ export const CrudPage = ({ title, subtitle, endpoint, fields, columns, defaults 
           <Plus size={14} /> Novo
         </button>
       </header>
-      {headerContent}
+      {resolvedHeaderContent}
       <input placeholder="Buscar..." value={search} onChange={(e) => setSearch(e.target.value)}
         className="lm-input md:!w-80 mb-3" data-testid={`${testid}-search`} />
       <div className="lm-table-wrap overflow-x-auto">

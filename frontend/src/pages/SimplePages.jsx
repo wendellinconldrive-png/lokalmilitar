@@ -64,6 +64,27 @@ const FUEL_TYPES = ["Gasolina", "Etanol", "Diesel", "GNV"];
 const escapeReportHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (character) => ({
   "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
 }[character]));
+const printRecordsReport = ({ title, filterLabel, rows, columns }) => {
+  const printWindow = window.open("", "_blank");
+  if (!printWindow) {
+    toast.error("Permita pop-ups para imprimir o relatório");
+    return;
+  }
+  const reportRows = rows.map((row) => `
+    <tr>${columns.map((column) => {
+      const value = column.value(row);
+      return `<td>${escapeReportHtml(value ?? "—")}</td>`;
+    }).join("")}</tr>`);
+  printWindow.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${escapeReportHtml(title)}</title>
+    <style>body{font:12px Arial,sans-serif;padding:24px;color:#222}h1{color:#354017;font-size:20px}table{width:100%;border-collapse:collapse;margin-top:16px}th,td{border:1px solid #aaa;padding:7px;text-align:left}th{background:#eee}.summary{margin-top:16px;font-weight:bold}@media print{body{padding:0}}</style>
+    </head><body><h1>LOKAL MILITAR — ${escapeReportHtml(title)}</h1>
+    <p>Filtro: ${escapeReportHtml(filterLabel)} · Gerado em ${escapeReportHtml(new Date().toLocaleString("pt-BR"))}</p>
+    <table><thead><tr>${columns.map((column) => `<th>${escapeReportHtml(column.label)}</th>`).join("")}</tr></thead>
+    <tbody>${reportRows.length ? reportRows.join("") : `<tr><td colspan="${columns.length}" style="text-align:center">Nenhum registro encontrado.</td></tr>`}</tbody></table>
+    <div class="summary">${rows.length} registro(s)</div></body></html>`);
+  printWindow.document.close();
+  printWindow.setTimeout(() => printWindow.print(), 300);
+};
 const getTravelPeriodRange = (type, value) => {
   if (type === "week") {
     const match = /^(\d{4})-W(\d{2})$/.exec(value);
@@ -125,12 +146,49 @@ export function Vehicles() {
 
 export function Insumos() {
   const [suppliers, setSuppliers] = useState([]);
+  const [selectedSupply, setSelectedSupply] = useState("");
   const { run: withSubmitLock, isPending } = useSubmitLock();
   useEffect(() => { api.get("/suppliers").then((r) => setSuppliers(r.data)); }, []);
   const supName = (id) => suppliers.find((s) => s.id === id)?.name || "-";
+  const supplyReportFilters = ({ rows }) => {
+    const supplies = [...new Set(rows.map((row) => row.description?.trim()).filter(Boolean))]
+      .sort((first, second) => first.localeCompare(second, "pt-BR"));
+    return (
+      <section className="lokal-panel p-3 my-3 flex flex-wrap items-end gap-3" data-testid="insumos-report-filters">
+        <div className="font-head text-sm">Relatório de insumos</div>
+        <label className="text-xs font-mono">
+          Insumo
+          <select className="lm-input mt-1" value={selectedSupply} onChange={(event) => setSelectedSupply(event.target.value)} data-testid="insumos-report-filter">
+            <option value="">Todos os insumos</option>
+            {supplies.map((supply) => <option key={supply} value={supply}>{supply}</option>)}
+          </select>
+        </label>
+        <button className="lm-btn lm-btn-dark" onClick={() => {
+          const filteredRows = selectedSupply ? rows.filter((row) => row.description?.trim() === selectedSupply) : rows;
+          printRecordsReport({
+            title: "Relatório de insumos",
+            filterLabel: selectedSupply || "Todos os insumos",
+            rows: filteredRows,
+            columns: [
+              { label: "DATA", value: (row) => formatDateShort(row.date) },
+              { label: "DESCRIÇÃO", value: (row) => row.description },
+              { label: "FORNECEDOR", value: (row) => supName(row.supplier_id) },
+              { label: "VALOR", value: (row) => formatBRL(row.amount) },
+              { label: "COMPRADO", value: (row) => `${Number(row.quantity || 0)} ${row.unit || ""}` },
+              { label: "CONSUMIDO", value: (row) => `${Math.max(Number(row.quantity || 0) - Number(row.remaining_quantity || 0), 0)} ${row.unit || ""}` },
+              { label: "RESTANTE", value: (row) => `${Number(row.remaining_quantity || 0)} ${row.unit || ""}` },
+            ],
+          });
+        }} data-testid="print-insumos-report">
+          Imprimir relatório de insumos
+        </button>
+      </section>
+    );
+  };
   return (
     <CrudPage title="Insumos" subtitle="Linhas, botões, tecidos, embalagens e outros gastos" endpoint="expenses" testid="insumos"
       filter={(r) => r.type === "INSUMO"} defaults={{ type: "INSUMO", date: new Date().toISOString().slice(0, 10) }}
+      headerContent={supplyReportFilters}
       fields={[
         { key: "description", label: "Descrição", required: true, wide: true },
         { key: "amount", label: "Valor (R$)", type: "number", required: true },
@@ -342,6 +400,7 @@ export function Viagens() {
 export function Manutencao() {
   const [vehicles, setVehicles] = useState([]);
   const [services, setServices] = useState([]);
+  const [selectedVehicle, setSelectedVehicle] = useState("");
   useEffect(() => {
     Promise.all([api.get("/vehicles"), api.get("/expenses")])
       .then(([vehicleResponse, expenseResponse]) => {
@@ -372,9 +431,47 @@ export function Manutencao() {
       km: vehicle?.current_km ?? "",
     };
   };
+  const maintenanceReportFilters = ({ rows }) => {
+    const vehicle = vehicles.find((item) => item.id === selectedVehicle);
+    const vehicleLabel = vehicle ? [vehicle.name, vehicle.model, vehicle.plate].filter(Boolean).join(" · ") : "Todos os veículos";
+    return (
+      <section className="lokal-panel p-3 my-3 flex flex-wrap items-end gap-3" data-testid="maintenance-report-filters">
+        <div className="font-head text-sm">Relatório de manutenção</div>
+        <label className="text-xs font-mono">
+          Veículo
+          <select className="lm-input mt-1" value={selectedVehicle} onChange={(event) => setSelectedVehicle(event.target.value)} data-testid="maintenance-report-filter">
+            <option value="">Todos os veículos</option>
+            {vehicles.map((item) => (
+              <option key={item.id} value={item.id}>{[item.name, item.model, item.plate].filter(Boolean).join(" · ")}</option>
+            ))}
+          </select>
+        </label>
+        <button className="lm-btn lm-btn-dark" onClick={() => {
+          const filteredRows = selectedVehicle ? rows.filter((row) => row.vehicle_id === selectedVehicle) : rows;
+          printRecordsReport({
+            title: "Relatório de manutenção",
+            filterLabel: vehicleLabel,
+            rows: filteredRows,
+            columns: [
+              { label: "DATA", value: (row) => formatDateShort(row.date) },
+              { label: "SERVIÇO", value: (row) => row.description },
+              { label: "VEÍCULO", value: (row) => row.vehicle_model },
+              { label: "PLACA", value: (row) => row.plate },
+              { label: "KM", value: (row) => row.km },
+              { label: "VALOR", value: (row) => formatBRL(row.amount) },
+              { label: "PRÓX. REVISÃO", value: (row) => formatDateShort(row.next_review_date) },
+            ],
+          });
+        }} data-testid="print-maintenance-report">
+          Imprimir relatório de manutenção
+        </button>
+      </section>
+    );
+  };
   return (
     <CrudPage title="Manutenção Veículo" subtitle="Revisões, trocas de óleo, pneus e reparos" endpoint="expenses" testid="manutencao"
       filter={(r) => r.type === "MANUTENCAO"} defaults={{ type: "MANUTENCAO", date: new Date().toISOString().slice(0, 10) }}
+      headerContent={maintenanceReportFilters}
       onSaved={(maintenance) => {
         const service = maintenance.description?.trim();
         if (service) setServices((previous) => previous.includes(service) ? previous : [...previous, service]);
