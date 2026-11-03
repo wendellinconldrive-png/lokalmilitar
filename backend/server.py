@@ -18,6 +18,7 @@ import zipfile
 import zlib
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Any
+from requests.exceptions import RequestException
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 from fastapi import (
@@ -32,15 +33,28 @@ from fastapi import (
     Request,
     UploadFile,
 )
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorGridFSBucket
 from pydantic import BaseModel, Field, ConfigDict, EmailStr
-from pymongo.errors import DuplicateKeyError
+from pymongo.errors import DuplicateKeyError, PyMongoError
 from bson import ObjectId, json_util
 from gridfs.errors import NoFile
+from pywebpush import WebPushException, webpush
+from google_calendar import (
+    build_calendar_events,
+    build_due_notifications,
+    decrypt_token,
+    encrypt_token,
+    exchange_code,
+    google_account_email,
+    google_configuration_missing,
+    oauth_authorization_url,
+    push_configuration_missing,
+    sync_calendar,
+)
 
 FUEL_TYPES = ("Gasolina", "Etanol", "Diesel", "GNV")
 DEFAULT_FUEL_PRICES = {fuel_type: 0 for fuel_type in FUEL_TYPES}
@@ -68,6 +82,8 @@ app = FastAPI(title="LOKAL MILITAR API")
 app.add_middleware(GZipMiddleware, minimum_size=500)
 api = APIRouter(prefix="/api")
 security = HTTPBearer(auto_error=False)
+_google_calendar_sync_lock = asyncio.Lock()
+_calendar_worker_task = None
 
 @app.middleware("http")
 async def reject_legacy_offline_writes(request: Request, call_next):
@@ -464,6 +480,14 @@ class ManualMontageInput(BaseModel):
 
 class DataResetInput(BaseModel):
     groups: List[str]
+
+class PushSubscriptionKeys(BaseModel):
+    p256dh: str = Field(min_length=1, max_length=256)
+    auth: str = Field(min_length=1, max_length=128)
+
+class PushSubscriptionInput(BaseModel):
+    endpoint: str = Field(min_length=1, max_length=2048)
+    keys: PushSubscriptionKeys
 
 class Settings(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -1948,6 +1972,224 @@ async def update_settings(payload: dict, user: dict = Depends(get_current_user))
     await db.settings.update_one({"id": "singleton"}, {"$set": payload}, upsert=True)
     return await db.settings.find_one({"id": "singleton"}, {"_id": 0})
 
+def _google_frontend_redirect(result: str):
+    frontend_url = os.environ.get("FRONTEND_URL", "").strip().rstrip("/")
+    if not frontend_url:
+        origins = [
+            origin.strip().rstrip("/")
+            for origin in os.environ.get("CORS_ORIGINS", "").split(",")
+            if origin.strip() and origin.strip() != "*"
+        ]
+        frontend_url = origins[0] if origins else ""
+    if not frontend_url:
+        raise HTTPException(503, "Configure FRONTEND_URL para concluir a conexão Google")
+    return RedirectResponse(f"{frontend_url}/configuracoes?google_calendar={result}")
+
+async def _sync_google_calendar():
+    if google_configuration_missing():
+        raise RuntimeError("A conexão Google Agenda ainda não está configurada no servidor")
+    async with _google_calendar_sync_lock:
+        integration = await db.google_calendar_integrations.find_one({"_id": "primary"})
+        if not integration or not integration.get("encrypted_token"):
+            raise RuntimeError("Conecte uma conta Google Agenda antes de sincronizar")
+        token = decrypt_token(integration["encrypted_token"])
+        dashboard_events = await db.dashboard_events.find({}, {"_id": 0}).to_list(5000)
+        expenses = await db.expenses.find(
+            {"type": "MANUTENCAO"}, {"_id": 0}
+        ).to_list(5000)
+        orders = await db.orders.find({}, {"_id": 0}).to_list(5000)
+        events = build_calendar_events(dashboard_events, expenses, orders)
+        mappings = {
+            document["_id"]: document
+            async for document in db.google_calendar_event_mappings.find({})
+        }
+        refreshed_token, updated_mappings = await asyncio.to_thread(
+            sync_calendar, token, events, mappings
+        )
+        for source_key, mapping in updated_mappings.items():
+            await db.google_calendar_event_mappings.update_one(
+                {"_id": source_key},
+                {"$set": {
+                    "event_id": mapping["event_id"],
+                    "event_hash": mapping["event_hash"],
+                    "updated_at": now_iso(),
+                }},
+                upsert=True,
+            )
+        stale_keys = [key for key in mappings if key not in updated_mappings]
+        if stale_keys:
+            await db.google_calendar_event_mappings.delete_many({"_id": {"$in": stale_keys}})
+        sync_time = now_iso()
+        await db.google_calendar_integrations.update_one(
+            {"_id": "primary"},
+            {"$set": {
+                "encrypted_token": encrypt_token(refreshed_token),
+                "last_sync_at": sync_time,
+                "last_error": "",
+            }},
+        )
+        return {"synced_events": len(updated_mappings), "last_sync_at": sync_time}
+
+@api.get("/integrations/google-calendar/status")
+async def google_calendar_status(user: dict = Depends(require_admin)):
+    integration = await db.google_calendar_integrations.find_one({"_id": "primary"})
+    return {
+        "configured": not google_configuration_missing(),
+        "missing_configuration": google_configuration_missing(),
+        "connected": bool(integration and integration.get("encrypted_token")),
+        "email": integration.get("email", "") if integration else "",
+        "last_sync_at": integration.get("last_sync_at") if integration else None,
+        "last_error": integration.get("last_error", "") if integration else "",
+    }
+
+@api.post("/integrations/google-calendar/connect")
+async def google_calendar_connect(user: dict = Depends(require_admin)):
+    missing = google_configuration_missing()
+    if missing:
+        raise HTTPException(503, f"Configuração do Google Agenda ausente no servidor: {', '.join(missing)}")
+    state = secrets.token_urlsafe(32)
+    await db.google_calendar_oauth_states.insert_one({
+        "_id": state,
+        "user_id": user["id"],
+        "expires_at": datetime.now(timezone.utc) + timedelta(minutes=10),
+    })
+    return {"authorization_url": oauth_authorization_url(state)}
+
+@api.get("/integrations/google-calendar/callback", include_in_schema=False)
+async def google_calendar_callback(request: Request):
+    state = request.query_params.get("state", "")
+    state_document = await db.google_calendar_oauth_states.find_one_and_delete({"_id": state}) if state else None
+    valid_state = state_document and state_document.get("expires_at")
+    if valid_state:
+        expiry = state_document["expires_at"]
+        if expiry.tzinfo is None:
+            expiry = expiry.replace(tzinfo=timezone.utc)
+        valid_state = expiry > datetime.now(timezone.utc)
+    if not valid_state:
+        return _google_frontend_redirect("error")
+    admin = await db.users.find_one(
+        {"id": state_document["user_id"], "role": "admin"},
+        {"_id": 1},
+    )
+    if not admin:
+        return _google_frontend_redirect("error")
+    if request.query_params.get("error"):
+        return _google_frontend_redirect("error")
+    code = request.query_params.get("code")
+    if not code:
+        return _google_frontend_redirect("error")
+    try:
+        previous = await db.google_calendar_integrations.find_one({"_id": "primary"})
+        previous_token = decrypt_token(previous["encrypted_token"]) if previous and previous.get("encrypted_token") else None
+        token = await asyncio.to_thread(exchange_code, code, previous_token)
+        email = await asyncio.to_thread(google_account_email, token)
+        if previous and previous.get("email", "").lower() != email.lower():
+            await db.google_calendar_event_mappings.delete_many({})
+        await db.google_calendar_integrations.update_one(
+            {"_id": "primary"},
+            {"$set": {
+                "email": email,
+                "encrypted_token": encrypt_token(token),
+                "connected_at": now_iso(),
+                "last_error": "",
+            }},
+            upsert=True,
+        )
+        await db.google_calendar_integrations.update_one(
+            {"_id": "primary"}, {"$unset": {"disconnected_at": ""}}
+        )
+        try:
+            await _sync_google_calendar()
+        except (RuntimeError, ValueError, PermissionError, OSError, RequestException) as error:
+            await db.google_calendar_integrations.update_one(
+                {"_id": "primary"}, {"$set": {"last_error": str(error)}}
+            )
+            logging.exception("Google Agenda conectado, mas a sincronização inicial falhou")
+        return _google_frontend_redirect("connected")
+    except (ValueError, PermissionError, OSError, RequestException):
+        logging.exception("Falha ao concluir a conexão com Google Agenda")
+        return _google_frontend_redirect("error")
+
+@api.post("/integrations/google-calendar/sync")
+async def google_calendar_sync(user: dict = Depends(require_admin)):
+    try:
+        return await _sync_google_calendar()
+    except (RuntimeError, ValueError, PermissionError, OSError, RequestException) as error:
+        await db.google_calendar_integrations.update_one(
+            {"_id": "primary"}, {"$set": {"last_error": str(error)}}
+        )
+        logging.exception("Falha na sincronização manual do Google Agenda")
+        raise HTTPException(502, str(error)) from error
+
+@api.delete("/integrations/google-calendar/disconnect")
+async def google_calendar_disconnect(user: dict = Depends(require_admin)):
+    await db.google_calendar_integrations.update_one(
+        {"_id": "primary"},
+        {"$unset": {"encrypted_token": ""}, "$set": {
+            "disconnected_at": now_iso(),
+            "last_error": "",
+        }},
+    )
+    return {"disconnected": True}
+
+@api.get("/notifications/push/status")
+async def push_notification_status(
+    endpoint: Optional[str] = Query(default=None, max_length=2048),
+    user: dict = Depends(get_current_user),
+):
+    subscription_id = hashlib.sha256(endpoint.encode()).hexdigest() if endpoint else None
+    return {
+        "configured": not push_configuration_missing(),
+        "subscribed": bool(subscription_id and await db.push_subscriptions.find_one({
+            "_id": subscription_id, "user_id": user["id"],
+        })),
+    }
+
+@api.get("/notifications/push/public-key")
+async def push_notification_public_key(user: dict = Depends(get_current_user)):
+    missing = push_configuration_missing()
+    if missing:
+        raise HTTPException(503, f"Notificações push não configuradas no servidor: {', '.join(missing)}")
+    return {"public_key": os.environ["WEB_PUSH_VAPID_PUBLIC_KEY"]}
+
+@api.post("/notifications/push/subscribe")
+async def subscribe_push_notifications(
+    payload: PushSubscriptionInput,
+    user: dict = Depends(get_current_user),
+):
+    if push_configuration_missing():
+        raise HTTPException(503, "Notificações push não configuradas no servidor")
+    endpoint = urlsplit(payload.endpoint)
+    hostname = (endpoint.hostname or "").lower()
+    trusted_push_hosts = (
+        hostname == "fcm.googleapis.com"
+        or hostname.endswith(".push.services.mozilla.com")
+        or hostname.endswith(".push.apple.com")
+        or hostname.endswith(".notify.windows.com")
+    )
+    if endpoint.scheme != "https" or not trusted_push_hosts:
+        raise HTTPException(400, "O endpoint de notificação não pertence a um serviço push compatível")
+    subscription_id = hashlib.sha256(payload.endpoint.encode()).hexdigest()
+    await db.push_subscriptions.update_one(
+        {"_id": subscription_id},
+        {"$set": {
+            "user_id": user["id"],
+            "subscription": payload.model_dump(),
+            "updated_at": now_iso(),
+        }},
+        upsert=True,
+    )
+    return {"subscribed": True}
+
+@api.delete("/notifications/push/subscribe")
+async def unsubscribe_push_notifications(
+    payload: PushSubscriptionInput,
+    user: dict = Depends(get_current_user),
+):
+    subscription_id = hashlib.sha256(payload.endpoint.encode()).hexdigest()
+    await db.push_subscriptions.delete_one({"_id": subscription_id, "user_id": user["id"]})
+    return {"subscribed": False}
+
 @api.get("/dashboard/events")
 async def list_dashboard_events(user: dict = Depends(get_current_user)):
     return await db.dashboard_events.find({}, {"_id": 0}).sort(
@@ -2537,6 +2779,115 @@ app.add_middleware(
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("lokal")
 
+async def _send_due_push_notifications():
+    if push_configuration_missing():
+        return
+    local_now = datetime.now(ZoneInfo("America/Sao_Paulo"))
+    if local_now.hour < 9:
+        return
+    today = local_now.date()
+    dashboard_events = await db.dashboard_events.find({}, {"_id": 0}).to_list(5000)
+    maintenance = await db.expenses.find(
+        {"type": "MANUTENCAO"}, {"_id": 0}
+    ).to_list(5000)
+    pending_orders = await db.orders.find(
+        {"status": {"$nin": ["Entregue", "Retirado", "Cancelado"]}},
+        {"_id": 0},
+    ).to_list(5000)
+    notifications = build_due_notifications(
+        dashboard_events, maintenance, pending_orders, today
+    )
+    subscriptions = await db.push_subscriptions.find({}).to_list(10000)
+    for subscription_document in subscriptions:
+        subscription = subscription_document["subscription"]
+        subscription_id = subscription_document["_id"]
+        claims = {"sub": os.environ["WEB_PUSH_VAPID_SUBJECT"]}
+        for notification in notifications:
+            delivery_id = hashlib.sha256(
+                f"{subscription_id}:{notification['id']}".encode()
+            ).hexdigest()
+            try:
+                await db.push_notification_deliveries.insert_one({
+                    "_id": delivery_id,
+                    "status": "sending",
+                    "started_at": datetime.now(timezone.utc),
+                })
+            except DuplicateKeyError:
+                previous = await db.push_notification_deliveries.find_one({"_id": delivery_id})
+                if previous and previous.get("status") == "sent":
+                    continue
+                started = previous.get("started_at") if previous else None
+                if started and started.tzinfo is None:
+                    started = started.replace(tzinfo=timezone.utc)
+                if started and datetime.now(timezone.utc) - started < timedelta(minutes=10):
+                    continue
+                await db.push_notification_deliveries.update_one(
+                    {"_id": delivery_id},
+                    {"$set": {"status": "sending", "started_at": datetime.now(timezone.utc)}},
+                )
+            try:
+                await asyncio.to_thread(
+                    webpush,
+                    subscription_info=subscription,
+                    data=json_util.dumps({
+                        "title": notification["title"],
+                        "body": notification["body"],
+                        "url": notification["url"],
+                    }),
+                    vapid_private_key=os.environ["WEB_PUSH_VAPID_PRIVATE_KEY"],
+                    vapid_claims=claims,
+                    ttl=60 * 60 * 24,
+                )
+                await db.push_notification_deliveries.update_one(
+                    {"_id": delivery_id},
+                    {"$set": {"status": "sent", "sent_at": datetime.now(timezone.utc)}},
+                )
+            except WebPushException as error:
+                response = getattr(error, "response", None)
+                status_code = getattr(response, "status_code", None)
+                if status_code in (404, 410):
+                    await db.push_subscriptions.delete_one({"_id": subscription_id})
+                    await db.push_notification_deliveries.delete_one({"_id": delivery_id})
+                else:
+                    await db.push_notification_deliveries.delete_one({"_id": delivery_id})
+                    logger.error("Falha ao enviar notificação push (HTTP %s)", status_code, exc_info=error)
+            except (RequestException, ValueError) as error:
+                await db.push_notification_deliveries.delete_one({"_id": delivery_id})
+                logger.error("Falha ao enviar notificação push: %s", error)
+
+async def _integration_background_worker():
+    while True:
+        try:
+            integration = await db.google_calendar_integrations.find_one({"_id": "primary"})
+            if integration and integration.get("encrypted_token") and not google_configuration_missing():
+                last_sync = integration.get("last_sync_at")
+                last_sync_time = None
+                if last_sync:
+                    try:
+                        last_sync_time = (
+                            last_sync
+                            if isinstance(last_sync, datetime)
+                            else datetime.fromisoformat(last_sync.replace("Z", "+00:00"))
+                        )
+                    except (AttributeError, TypeError, ValueError):
+                        logger.warning("Data da última sincronização Google inválida")
+                    if last_sync_time and last_sync_time.tzinfo is None:
+                        last_sync_time = last_sync_time.replace(tzinfo=timezone.utc)
+                if not last_sync_time or (
+                    datetime.now(timezone.utc) - last_sync_time.astimezone(timezone.utc)
+                ).total_seconds() >= 300:
+                    try:
+                        await _sync_google_calendar()
+                    except (RuntimeError, ValueError, PermissionError, OSError, RequestException) as error:
+                        await db.google_calendar_integrations.update_one(
+                            {"_id": "primary"}, {"$set": {"last_error": str(error)}}
+                        )
+                        raise
+            await _send_due_push_notifications()
+        except (RuntimeError, ValueError, PermissionError, OSError, RequestException, PyMongoError):
+            logger.exception("Falha no ciclo de sincronização ou notificações")
+        await asyncio.sleep(60)
+
 @app.on_event("startup")
 async def startup():
     if "offline_idempotency" in await db.list_collection_names():
@@ -2573,8 +2924,19 @@ async def startup():
     await db.expenses.create_index("date")
     await db.stock_movements.create_index("created_at")
     await db.day_closures.create_index("date", unique=True)
+    await db.google_calendar_oauth_states.create_index("expires_at", expireAfterSeconds=0)
+    await db.push_subscriptions.create_index("user_id")
+    await db.push_notification_deliveries.create_index("sent_at", expireAfterSeconds=60 * 60 * 24 * 60)
+    global _calendar_worker_task
+    _calendar_worker_task = asyncio.create_task(_integration_background_worker())
     logger.info("LOKAL MILITAR API started.")
 
 @app.on_event("shutdown")
 async def shutdown():
+    if _calendar_worker_task:
+        _calendar_worker_task.cancel()
+        try:
+            await _calendar_worker_task
+        except asyncio.CancelledError:
+            pass
     client.close()

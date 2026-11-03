@@ -57,6 +57,40 @@ Para permitir acesso sem login, configure `PUBLIC_ACCESS_MODE=true` nas variáve
 
 No Render, defina `CORS_ORIGINS` com a origem pública do frontend da Vercel, sem barra no final, e faça um novo deploy da API. Se usar domínios adicionais (como um domínio próprio), inclua cada origem separada por vírgula.
 
+### 5. Conectar Google Agenda e notificações
+
+1. No Google Cloud Console, crie ou selecione um projeto, ative a **Google Calendar API** e configure a tela de consentimento OAuth.
+2. Crie um cliente OAuth do tipo **Aplicativo da Web**. Cadastre como URI de redirecionamento autorizado `https://<URL-DA-API>/api/integrations/google-calendar/callback`. O escopo solicitado é `calendar.events`; o Google pode exigir a publicação/verificação do consentimento para uso fora dos usuários de teste.
+3. Configure no Render, como variáveis privadas do serviço da API:
+   - `GOOGLE_CLIENT_ID` e `GOOGLE_CLIENT_SECRET` do cliente OAuth.
+   - `GOOGLE_REDIRECT_URI` com a mesma URL cadastrada no Google.
+   - `FRONTEND_URL` com a origem do frontend na Vercel, sem barra final.
+   - `GOOGLE_TOKEN_ENCRYPTION_KEY`, gerada uma única vez com `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`. Guarde essa chave: mudar ou perder a chave exige reconectar a conta Google.
+4. Gere as chaves VAPID para Web Push localmente, com as dependências do backend instaladas:
+
+   ```python
+   import base64
+   from cryptography.hazmat.primitives import serialization
+   from py_vapid import Vapid
+
+   key = Vapid()
+   key.generate_keys()
+   private_key = key.private_key.private_numbers().private_value.to_bytes(32, "big")
+   public_key = key.public_key.public_bytes(
+       serialization.Encoding.X962,
+       serialization.PublicFormat.UncompressedPoint,
+   )
+   print("WEB_PUSH_VAPID_PUBLIC_KEY=" + base64.urlsafe_b64encode(public_key).decode().rstrip("="))
+   print("WEB_PUSH_VAPID_PRIVATE_KEY=" + base64.urlsafe_b64encode(private_key).decode().rstrip("="))
+   print("WEB_PUSH_VAPID_SUBJECT=mailto:seu-email-administrativo@exemplo.com")
+   ```
+
+   Cadastre os três valores no Render; mantenha a chave privada fora do repositório. Após configurar as variáveis, faça o deploy da API.
+5. Em **Configurações**, o administrador conecta a conta Google. O sistema sincroniza o quadro de avisos, próximas revisões e pedidos em aberto. Eventos e revisões recebem alertas por e-mail e pop-up um dia antes e no dia, às 9h; pedidos ainda pendentes recebem lembretes diários às 9h a partir do dia seguinte ao cadastro. Pedidos entregues, retirados ou cancelados deixam de ser sincronizados como pendentes.
+6. Cada usuário ativa **Notificações neste navegador** em Configurações, permitindo as notificações do sistema operacional. A permissão é específica por navegador/dispositivo.
+
+A sincronização do Agenda se repete a cada cinco minutos enquanto a API está ativa; também é possível sincronizar manualmente. Como este Blueprint usa o plano gratuito do Render, a API pode suspender-se sem tráfego. Nesse caso, a sincronização e o Web Push podem atrasar até a API voltar a executar. A entrega em segundo plano no horário exato exige um serviço sempre ativo ou um Cron/worker no Render, que pode ter custo adicional; a configuração atual não cria esse serviço.
+
 ### Backend local de testes
 
 Os testes de integração usam uma API local e um banco MongoDB separado (`lokalmilitar_test`). Eles não devem ser executados contra produção.

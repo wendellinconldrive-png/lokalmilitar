@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useAuth, DEFAULT_THEME } from "@/contexts/AuthContext";
 import { toast } from "sonner";
-import { Trash2, Download, Upload } from "lucide-react";
+import { Trash2, Download, Upload, Bell, CalendarDays, RefreshCw } from "lucide-react";
 import useSubmitLock from "@/hooks/useSubmitLock";
 import {
   DASHBOARD_KPIS,
@@ -20,6 +20,10 @@ const PANEL_COLORS = [
   { name: "Caqui Claro", value: "#EDE4D0" }, { name: "Oliva Claro", value: "#E9ECDC" }, { name: "Cinza Claro", value: "#F0F0F0" },
   { name: "Escuro", value: "#1E1E1E" },
 ];
+const decodeVapidKey = (value) => {
+  const padded = value.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(value.length / 4) * 4, "=");
+  return Uint8Array.from(window.atob(padded), (character) => character.charCodeAt(0));
+};
 
 const Swatches = ({ colors, current, onPick, prefix }) => (
   <div className="flex flex-wrap gap-3">
@@ -324,6 +328,8 @@ export default function Settings() {
   const [dayBackups, setDayBackups] = useState([]);
   const [backupFile, setBackupFile] = useState(null);
   const [restoringBackup, setRestoringBackup] = useState(false);
+  const [googleCalendar, setGoogleCalendar] = useState(null);
+  const [pushStatus, setPushStatus] = useState(null);
   const isAdmin = user?.role === "admin";
 
   const loadUsers = () => api.get("/auth/users").then((r) => {
@@ -346,6 +352,30 @@ export default function Settings() {
       setS(r.data);
       if (r.data.dashboard_preferences) applyDashboardPreferences(r.data.dashboard_preferences);
     });
+    (async () => {
+      try {
+        const registration = "serviceWorker" in navigator
+          ? await navigator.serviceWorker.getRegistration("/push-service-worker.js")
+          : null;
+        const subscription = await registration?.pushManager.getSubscription();
+        const response = await api.get("/notifications/push/status", {
+          params: subscription?.endpoint ? { endpoint: subscription.endpoint } : {},
+        });
+        setPushStatus(response.data);
+      } catch (error) {
+        toast.error(error.response?.data?.detail || "Não foi possível consultar os avisos do navegador");
+      }
+    })();
+    if (isAdmin) {
+      api.get("/integrations/google-calendar/status").then((response) => setGoogleCalendar(response.data))
+        .catch((error) => toast.error(error.response?.data?.detail || "Não foi possível consultar a integração com Google Agenda"));
+      const callbackResult = new URLSearchParams(window.location.search).get("google_calendar");
+      if (callbackResult) {
+        if (callbackResult === "connected") toast.success("Google Agenda conectado");
+        else toast.error("Não foi possível conectar o Google Agenda");
+        window.history.replaceState({}, "", window.location.pathname);
+      }
+    }
     api.get("/categories").then((r) => setCategories(r.data));
     loadUsers();
     if (isAdmin) {
@@ -362,6 +392,86 @@ export default function Settings() {
       });
     }
   }, [applyDashboardPreferences, isAdmin]);
+
+  const connectGoogleCalendar = async () => {
+    try {
+      const { data } = await api.post("/integrations/google-calendar/connect");
+      window.location.assign(data.authorization_url);
+    } catch (error) {
+      toast.error(error.response?.data?.detail || "Não foi possível iniciar a conexão com Google Agenda");
+    }
+  };
+
+  const syncGoogleCalendar = () => withSubmitLock("google-calendar-sync", async () => {
+    try {
+      const { data } = await api.post("/integrations/google-calendar/sync");
+      setGoogleCalendar((current) => ({ ...current, last_sync_at: data.last_sync_at, last_error: "" }));
+      toast.success(`${data.synced_events} evento(s) sincronizado(s) com Google Agenda`);
+    } catch (error) {
+      toast.error(error.response?.data?.detail || "Não foi possível sincronizar Google Agenda");
+    }
+  });
+
+  const disconnectGoogleCalendar = () => withSubmitLock("google-calendar-disconnect", async () => {
+    if (!window.confirm("Desconectar Google Agenda? Os eventos já sincronizados não serão apagados da conta Google.")) return;
+    try {
+      await api.delete("/integrations/google-calendar/disconnect");
+      setGoogleCalendar((current) => ({ ...current, connected: false, email: "", last_error: "" }));
+      toast.success("Google Agenda desconectado");
+    } catch (error) {
+      toast.error(error.response?.data?.detail || "Não foi possível desconectar Google Agenda");
+    }
+  });
+
+  const enablePushNotifications = () => withSubmitLock("enable-push", async () => {
+    if (!("Notification" in window) || !("serviceWorker" in navigator) || !("PushManager" in window)) {
+      toast.error("Este navegador não oferece notificações push");
+      return;
+    }
+    if (!pushStatus?.configured) {
+      toast.error("As notificações push ainda não foram configuradas no servidor");
+      return;
+    }
+    try {
+      const permission = await Notification.requestPermission();
+      if (permission !== "granted") {
+        toast.error("Permita as notificações do navegador para ativar os avisos");
+        return;
+      }
+      const registration = await navigator.serviceWorker.register("/push-service-worker.js");
+      const [{ data }] = await Promise.all([
+        api.get("/notifications/push/public-key"),
+        registration.ready,
+      ]);
+      let subscription = await registration.pushManager.getSubscription();
+      if (!subscription) {
+        subscription = await registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: decodeVapidKey(data.public_key),
+        });
+      }
+      await api.post("/notifications/push/subscribe", subscription.toJSON());
+      setPushStatus((current) => ({ ...current, subscribed: true }));
+      toast.success("Notificações ativadas neste navegador");
+    } catch (error) {
+      toast.error(error.response?.data?.detail || "Não foi possível ativar as notificações neste navegador");
+    }
+  });
+
+  const disablePushNotifications = () => withSubmitLock("disable-push", async () => {
+    try {
+      const registration = await navigator.serviceWorker.getRegistration("/push-service-worker.js");
+      const subscription = await registration?.pushManager.getSubscription();
+      if (subscription) {
+        await api.delete("/notifications/push/subscribe", { data: subscription.toJSON() });
+        await subscription.unsubscribe();
+      }
+      setPushStatus((current) => ({ ...current, subscribed: false }));
+      toast.success("Notificações desativadas neste navegador");
+    } catch (error) {
+      toast.error(error.response?.data?.detail || "Não foi possível desativar as notificações");
+    }
+  });
 
   const resetSystemData = () => withSubmitLock("reset-data", async () => {
     const groups = resetMode === "all"
@@ -575,6 +685,68 @@ export default function Settings() {
   return (
     <div className="space-y-5" data-testid="settings-page">
       <div className="lm-page-head"><h1>Configurações</h1><p>Aparência, dados da empresa e usuários</p></div>
+
+      <section className="lokal-panel p-4 space-y-3" data-testid="browser-notification-settings">
+        <div>
+          <h2 className="lokal-stencil text-sm mb-1">Notificações neste navegador</h2>
+          <p className="text-xs text-neutral-500">
+            Receba avisos de pedidos pendentes, eventos e revisões de veículos neste dispositivo.
+            No plano gratuito do servidor, a entrega pode atrasar quando a API estiver suspensa.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {!pushStatus?.subscribed ? (
+            <button className="lm-btn lm-btn-olive" onClick={enablePushNotifications} disabled={isPending("enable-push") || !pushStatus?.configured} data-testid="enable-browser-notifications">
+              <Bell size={15} />{isPending("enable-push") ? "ATIVANDO..." : "ATIVAR NESTE NAVEGADOR"}
+            </button>
+          ) : (
+            <button className="lm-btn lm-btn-dark" onClick={disablePushNotifications} disabled={isPending("disable-push")} data-testid="disable-browser-notifications">
+              {isPending("disable-push") ? "DESATIVANDO..." : "DESATIVAR NESTE NAVEGADOR"}
+            </button>
+          )}
+          {pushStatus && !pushStatus.configured && <span className="self-center text-xs text-amber-700">A configuração do servidor ainda está pendente.</span>}
+        </div>
+      </section>
+
+      {isAdmin && <section className="lokal-panel p-4 space-y-3" data-testid="google-calendar-settings">
+        <div>
+          <h2 className="lokal-stencil text-sm mb-1">Integração com Google Agenda</h2>
+          <p className="text-xs text-neutral-500">
+            Sincroniza eventos do dashboard, próximas revisões e lembretes diários dos pedidos em aberto.
+            Eventos e revisões avisam um dia antes e no dia; pedidos pendentes avisam diariamente às 9h.
+          </p>
+        </div>
+        {googleCalendar?.connected ? (
+          <>
+            <p className="text-sm">Conectado: <b>{googleCalendar.email || "Conta Google"}</b></p>
+            {googleCalendar.last_sync_at && <p className="text-xs text-neutral-500">Última sincronização: {new Date(googleCalendar.last_sync_at).toLocaleString("pt-BR")}</p>}
+            {googleCalendar.last_error && <p className="text-xs text-red-700">{googleCalendar.last_error}</p>}
+            <div className="flex flex-wrap gap-2">
+              <button className="lm-btn lm-btn-olive" onClick={syncGoogleCalendar} disabled={isPending("google-calendar-sync")} data-testid="sync-google-calendar">
+                <RefreshCw size={15} />{isPending("google-calendar-sync") ? "SINCRONIZANDO..." : "SINCRONIZAR AGORA"}
+              </button>
+              <button className="lm-btn lm-btn-dark" onClick={disconnectGoogleCalendar} disabled={isPending("google-calendar-disconnect")} data-testid="disconnect-google-calendar">
+                DESCONECTAR
+              </button>
+              <button className="lm-btn lm-btn-dark" onClick={connectGoogleCalendar} data-testid="reauthorize-google-calendar">
+                REAUTORIZAR GOOGLE
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <p className="text-xs text-neutral-500">
+              A conexão é autorizada pelo administrador em uma conta Google. Depois de conectar, o sistema sincroniza automaticamente enquanto a API estiver ativa.
+            </p>
+            {googleCalendar?.missing_configuration?.length > 0 && (
+              <p className="text-xs text-amber-700">Configuração pendente no servidor: {googleCalendar.missing_configuration.join(", ")}</p>
+            )}
+            <button className="lm-btn lm-btn-olive" onClick={connectGoogleCalendar} disabled={!googleCalendar?.configured} data-testid="connect-google-calendar">
+              <CalendarDays size={15} />CONECTAR GOOGLE AGENDA
+            </button>
+          </>
+        )}
+      </section>}
 
       <section className="lokal-panel p-4">
         <div className="flex items-center justify-between gap-3 mb-3">

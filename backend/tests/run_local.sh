@@ -65,4 +65,4 @@ else:
     raise SystemExit("Timed out waiting for local test API")
 PY
 
-python -m pytest -n 0 tests/test_lokal_api.py tests/test_lokal_edge.py
+python -m pytest -n 0 tests/test_google_calendar.py tests/test_lokal_api.py tests/test_lokal_edge.py
