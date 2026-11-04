@@ -64,7 +64,6 @@ const printShelfLabels = (rows) => {
       <div class="label-category">${escapeHtml(row.cat)}</div>
       <div class="label-details">
         <span class="label-size">TAM. ${escapeHtml(row.size)}</span>
-        <span class="label-price">${escapeHtml(formatBRL(row.price))}</span>
       </div>
       <div class="label-footer">
         <span>SKU: ${escapeHtml(row.sku)}</span>
@@ -81,9 +80,8 @@ const printShelfLabels = (rows) => {
       .label-brand{font-size:7pt;letter-spacing:1.2px;font-weight:800;color:#4B5320;border-bottom:.3mm solid #4B5320;padding-bottom:1mm}
       .label-name{font-size:11pt;font-weight:800;line-height:1.1;margin-top:1.4mm;max-height:8mm;overflow:hidden}
       .label-category{font-size:7pt;color:#555;margin-top:.7mm;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-      .label-details{display:flex;align-items:center;justify-content:space-between;margin-top:auto}
+      .label-details{display:flex;align-items:center;margin-top:auto}
       .label-size{font-size:10pt;font-weight:800}
-      .label-price{font-size:14pt;font-weight:800;white-space:nowrap}
       .label-footer{display:flex;justify-content:space-between;gap:2mm;margin-top:1mm;padding-top:1mm;border-top:.2mm solid #aaa;font-size:6.5pt;white-space:nowrap}
       @media print{body{print-color-adjust:exact;-webkit-print-color-adjust:exact}}
     </style></head><body><main class="label-sheet">${labels}</main>
