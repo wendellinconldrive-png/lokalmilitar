@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { enablePushNotifications as enableBrowserPushNotifications } from "@/lib/pushNotifications";
 import { useAuth, DEFAULT_THEME } from "@/contexts/AuthContext";
 import { toast } from "sonner";
 import { Trash2, Download, Upload, Bell, CalendarDays, RefreshCw } from "lucide-react";
@@ -20,11 +21,6 @@ const PANEL_COLORS = [
   { name: "Caqui Claro", value: "#EDE4D0" }, { name: "Oliva Claro", value: "#E9ECDC" }, { name: "Cinza Claro", value: "#F0F0F0" },
   { name: "Escuro", value: "#1E1E1E" },
 ];
-const decodeVapidKey = (value) => {
-  const padded = value.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(value.length / 4) * 4, "=");
-  return Uint8Array.from(window.atob(padded), (character) => character.charCodeAt(0));
-};
-
 const Swatches = ({ colors, current, onPick, prefix }) => (
   <div className="flex flex-wrap gap-3">
     {colors.map((c) => (
@@ -424,33 +420,12 @@ export default function Settings() {
   });
 
   const enablePushNotifications = () => withSubmitLock("enable-push", async () => {
-    if (!("Notification" in window) || !("serviceWorker" in navigator) || !("PushManager" in window)) {
-      toast.error("Este navegador não oferece notificações push");
-      return;
-    }
     if (!pushStatus?.configured) {
       toast.error("As notificações push ainda não foram configuradas no servidor");
       return;
     }
     try {
-      const permission = await Notification.requestPermission();
-      if (permission !== "granted") {
-        toast.error("Permita as notificações do navegador para ativar os avisos");
-        return;
-      }
-      const registration = await navigator.serviceWorker.register("/push-service-worker.js");
-      const [{ data }] = await Promise.all([
-        api.get("/notifications/push/public-key"),
-        registration.ready,
-      ]);
-      let subscription = await registration.pushManager.getSubscription();
-      if (!subscription) {
-        subscription = await registration.pushManager.subscribe({
-          userVisibleOnly: true,
-          applicationServerKey: decodeVapidKey(data.public_key),
-        });
-      }
-      await api.post("/notifications/push/subscribe", subscription.toJSON());
+      await enableBrowserPushNotifications();
       setPushStatus((current) => ({ ...current, subscribed: true }));
       toast.success("Notificações ativadas neste navegador");
     } catch (error) {
@@ -690,7 +665,9 @@ export default function Settings() {
         <div>
           <h2 className="lokal-stencil text-sm mb-1">Notificações neste navegador</h2>
           <p className="text-xs text-neutral-500">
-            Receba avisos de pedidos pendentes, eventos e revisões de veículos neste dispositivo.
+            Independente do Google Agenda e sem exigir plano Google pago. Envia os mesmos avisos pela barra de notificações:
+            eventos e revisões de veículos no dia anterior e no dia; pedidos em aberto diariamente a partir das 9h.
+            No iPhone/iPad, adicione o sistema à Tela de Início e permita notificações; no Android, permita notificações do navegador.
             No plano gratuito do servidor, a entrega pode atrasar quando a API estiver suspensa.
           </p>
         </div>

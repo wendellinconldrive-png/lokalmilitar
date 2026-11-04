@@ -525,6 +525,10 @@ class Vendor(BaseModel):
     name: str
     phone: Optional[str] = None
     cpf: Optional[str] = None
+    cep: Optional[str] = None
+    address_number: Optional[str] = None
+    address: Optional[str] = None
+    distance_km: float = 0
     signature: Optional[str] = None
     created_at: str = Field(default_factory=now_iso)
 

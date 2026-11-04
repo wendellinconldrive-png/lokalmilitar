@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState, useMemo, useRef } from "react";
+import { createPortal } from "react-dom";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import html2canvas from "html2canvas";
 import { api, formatBRL, formatDateShort } from "@/lib/api";
@@ -81,7 +82,16 @@ export default function Orders({ mode }) {
   const [savingJpeg, setSavingJpeg] = useState(false);
   const jpegTargetRef = useRef(null);
   const pendingProductFocusIndex = useRef(null);
+  const [printRoot, setPrintRoot] = useState(null);
   const { run: withSubmitLock, isPending } = useSubmitLock();
+
+  useEffect(() => {
+    const root = document.createElement("div");
+    root.id = "print-area";
+    document.body.appendChild(root);
+    setPrintRoot(root);
+    return () => root.remove();
+  }, []);
 
   const load = async () => {
     try {
@@ -524,9 +534,16 @@ export default function Orders({ mode }) {
       // The browser may not support locking orientation; the customer can rotate the device manually.
     }
   };
-  const runPrint = (pdf) => {
+  const runPrint = async (pdf) => {
+    const printLayout = printRoot?.querySelector(printMode === "a4" ? ".print-a4" : ".print-80");
+    if (!printLayout) {
+      toast.error("Não foi possível preparar o layout para impressão");
+      return;
+    }
     if (pdf) toast.info("Na janela de impressão, escolha 'Salvar como PDF' como destino");
-    setTimeout(() => window.print(), pdf ? 600 : 50);
+    if (document.fonts?.ready) await document.fonts.ready;
+    await new Promise((resolve) => window.requestAnimationFrame(() => window.requestAnimationFrame(resolve)));
+    window.setTimeout(() => window.print(), pdf ? 250 : 100);
   };
   const saveJpeg = async () => {
     if (printMode !== "a4" || !jpegTargetRef.current || savingJpeg) return;
@@ -816,14 +833,16 @@ export default function Orders({ mode }) {
       </div>
       )}
 
-      {/* Hidden print area */}
-      <div id="print-area" style={{ position:"absolute", left:"-9999px", top:0 }}>
+      {printRoot && createPortal(
+        <div>
         {batchPrinting.map(({ order, vendor, customer }) => (
           <PrintOrderA4 key={order.id} order={order} settings={settings} customer={customer} vendor={vendor} />
         ))}
         {printing && printMode==="a4" && <PrintOrderA4 order={printing} settings={settings} customer={cust(printing.customer_id)} vendor={printingVendor}/>}
         {printing && printMode==="80" && <PrintOrder80mm order={printing} settings={settings}/>}
-      </div>
+        </div>,
+        printRoot,
+      )}
 
       <Dialog open={!!printing} onOpenChange={(o) => { if (!o) { setPrinting(null); setPrintingVendor(null); } }}>
         <DialogContent className="max-w-[900px] w-[95vw] max-h-[92vh] overflow-y-auto no-print" data-testid="print-preview">

@@ -1,12 +1,14 @@
 import React, { useEffect, useState } from "react";
-import { Outlet, NavLink, Navigate } from "react-router-dom";
+import { Outlet, NavLink, Navigate, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import BrandMark from "@/components/BrandMark";
 import { api } from "@/lib/api";
+import { enablePushNotifications, isInstalledApp, isIosDevice, isMobileDevice } from "@/lib/pushNotifications";
 import { toast } from "sonner";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
   LayoutDashboard, Package, Boxes, ShoppingCart, Repeat, Users, Tag, Truck,
-  Wrench, Fuel, DollarSign, Settings, LogOut, Menu, X, Car, Bell
+  Wrench, Fuel, DollarSign, Settings, LogOut, Menu, X, Car, Bell, BellRing
 } from "lucide-react";
 
 const items = [
@@ -28,7 +30,11 @@ const items = [
 
 export default function AppLayout() {
   const { user, logout } = useAuth();
+  const navigate = useNavigate();
   const [open, setOpen] = useState(false);
+  const [pushPromptOpen, setPushPromptOpen] = useState(false);
+  const [pushConfigured, setPushConfigured] = useState(false);
+  const [pushActivating, setPushActivating] = useState(false);
 
   const enableCloseNotifications = async () => {
     if (!("Notification" in window)) {
@@ -45,6 +51,52 @@ export default function AppLayout() {
     } catch (notificationError) {
       console.error("Não foi possível solicitar permissão para notificações.", notificationError);
       toast.error("Não foi possível ativar as notificações do navegador.");
+    }
+  };
+
+  useEffect(() => {
+    if (!user?.id || user.id === "public-access" || !isMobileDevice()) return undefined;
+    if (!("Notification" in window) || !("serviceWorker" in navigator) || !("PushManager" in window)) return undefined;
+
+    const dismissedKey = `lokal-push-prompt-dismissed:${user.id}`;
+    if (localStorage.getItem(dismissedKey)) return undefined;
+    let cancelled = false;
+    const checkPushStatus = async () => {
+      try {
+        const registration = await navigator.serviceWorker.getRegistration("/push-service-worker.js");
+        const subscription = await registration?.pushManager.getSubscription();
+        const { data } = await api.get("/notifications/push/status", {
+          params: subscription?.endpoint ? { endpoint: subscription.endpoint } : {},
+        });
+        if (cancelled || !data.configured || data.subscribed) return;
+        setPushConfigured(true);
+        setPushPromptOpen(true);
+      } catch (error) {
+        console.error("Não foi possível verificar as notificações deste dispositivo.", error);
+      }
+    };
+
+    checkPushStatus();
+    return () => { cancelled = true; };
+  }, [user?.id]);
+
+  const dismissPushPrompt = () => {
+    if (user?.id) localStorage.setItem(`lokal-push-prompt-dismissed:${user.id}`, "dismissed");
+    setPushPromptOpen(false);
+  };
+
+  const activatePushOnDevice = async () => {
+    setPushActivating(true);
+    try {
+      await enablePushNotifications();
+      localStorage.setItem(`lokal-push-prompt-dismissed:${user.id}`, "enabled");
+      setPushPromptOpen(false);
+      toast.success("Notificações ativadas neste dispositivo");
+    } catch (error) {
+      console.error("Não foi possível ativar as notificações neste dispositivo.", error);
+      toast.error(error.response?.data?.detail || error.message || "Não foi possível ativar as notificações");
+    } finally {
+      setPushActivating(false);
     }
   };
 
@@ -114,6 +166,45 @@ export default function AppLayout() {
 
   return (
     <div className="App flex" style={{ minHeight: "100vh" }}>
+      <Dialog open={pushPromptOpen} onOpenChange={setPushPromptOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><BellRing size={20} /> Ative as notificações neste celular</DialogTitle>
+            <DialogDescription>
+              Receba avisos de pedidos e lembretes mesmo quando o sistema não estiver aberto. A permissão só será solicitada ao tocar no botão abaixo.
+            </DialogDescription>
+          </DialogHeader>
+          {isIosDevice() && !isInstalledApp() && (
+            <p className="text-sm text-amber-700">
+              No iPhone, primeiro adicione o Lokal Militar à Tela de Início pelo menu Compartilhar do Safari e abra o aplicativo pelo ícone criado.
+            </p>
+          )}
+          {("Notification" in window) && Notification.permission === "denied" && (
+            <p className="text-sm text-amber-700">
+              As notificações estão bloqueadas nas permissões do navegador. Libere-as nas configurações do dispositivo e tente novamente.
+            </p>
+          )}
+          <DialogFooter>
+            <button type="button" className="lm-btn lm-btn-dark" onClick={dismissPushPrompt}>Agora não</button>
+            <button
+              type="button"
+              className="lm-btn lm-btn-olive"
+              onClick={() => {
+                if (Notification.permission === "denied") {
+                  setPushPromptOpen(false);
+                  navigate("/configuracoes");
+                  return;
+                }
+                activatePushOnDevice();
+              }}
+              disabled={pushActivating || !pushConfigured || (isIosDevice() && !isInstalledApp())}
+              data-testid="activate-mobile-push"
+            >
+              {pushActivating ? "ATIVANDO..." : Notification.permission === "denied" ? "IR PARA CONFIGURAÇÕES" : "ATIVAR NOTIFICAÇÕES"}
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       {/* Mobile top bar */}
       <div className="md:hidden fixed top-0 left-0 right-0 z-40 bg-[#111] text-white flex items-center justify-between px-3 h-12 no-print">
         <button onClick={()=>setOpen(!open)} data-testid="mobile-menu-toggle">

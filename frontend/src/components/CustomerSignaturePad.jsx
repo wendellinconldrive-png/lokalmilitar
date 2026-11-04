@@ -1,6 +1,12 @@
 import React, { useEffect, useRef } from "react";
 
-export default function CustomerSignaturePad({ initialValue, onChange }) {
+export default function CustomerSignaturePad({
+  initialValue,
+  onChange,
+  label = "Assinatura do cliente",
+  testid = "customer-signature-pad",
+  clearTestid = "clear-customer-signature",
+}) {
   const canvasRef = useRef(null);
   const drawing = useRef(false);
 
@@ -59,7 +65,7 @@ export default function CustomerSignaturePad({ initialValue, onChange }) {
 
   return (
     <div className="space-y-2">
-      <p className="text-sm">Assinatura do cliente</p>
+      <p className="text-sm">{label}</p>
       <canvas
         ref={canvasRef}
         width={900}
@@ -69,10 +75,10 @@ export default function CustomerSignaturePad({ initialValue, onChange }) {
         onPointerMove={draw}
         onPointerUp={stop}
         onPointerCancel={stop}
-        aria-label="Campo para assinatura do cliente"
-        data-testid="customer-signature-pad"
+        aria-label={`Campo para ${label.toLocaleLowerCase()}`}
+        data-testid={testid}
       />
-      <button type="button" className="lm-btn lm-btn-outline" onClick={clear} data-testid="clear-customer-signature">Limpar assinatura</button>
+      <button type="button" className="lm-btn lm-btn-outline" onClick={clear} data-testid={clearTestid}>Limpar assinatura</button>
     </div>
   );
 }
