@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState, useMemo, useRef } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import html2canvas from "html2canvas";
 import { api, formatBRL, formatDateShort } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
@@ -12,6 +12,7 @@ import CustomerSearchSelect from "@/components/CustomerSearchSelect";
 import CustomerSignaturePad from "@/components/CustomerSignaturePad";
 import ProductSearchSelect from "@/components/ProductSearchSelect";
 import useSubmitLock from "@/hooks/useSubmitLock";
+import { focusNextField } from "@/lib/keyboardNavigation";
 
 const BLANK_ORDER = {
   type: "VENDA", status: "Separado", customer_id: "", customer_name: "",
@@ -40,6 +41,8 @@ const isCompletedOrder = (order) => ["Entregue", "Retirado"].includes(order.stat
 
 export default function Orders({ mode }) {
   const { user } = useAuth();
+  const location = useLocation();
+  const navigate = useNavigate();
   const isAdmin = user?.role === "admin";
   const isTrocas = mode === "trocas";
   const [searchParams, setSearchParams] = useSearchParams();
@@ -77,6 +80,7 @@ export default function Orders({ mode }) {
   const [autoPrintPending, setAutoPrintPending] = useState(false);
   const [savingJpeg, setSavingJpeg] = useState(false);
   const jpegTargetRef = useRef(null);
+  const pendingProductFocusIndex = useRef(null);
   const { run: withSubmitLock, isPending } = useSubmitLock();
 
   const load = async () => {
@@ -104,7 +108,7 @@ export default function Orders({ mode }) {
 
   const prodById = useMemo(()=>Object.fromEntries(products.map(p=>[p.id,p])),[products]);
 
-  const openNew = () => {
+  const openNew = useCallback(() => {
     const assignedVendor = vendors.find((vendor) => vendor.id === user?.vendor_id);
     setEditing({
       ...BLANK_ORDER,
@@ -112,7 +116,13 @@ export default function Orders({ mode }) {
       ...(assignedVendor ? { vendor_id: assignedVendor.id, vendor_name: assignedVendor.name } : {}),
     });
     setOpen(true);
-  };
+  }, [vendors, user?.vendor_id, isTrocas]);
+  const newOrderShortcut = location.state?.newOrderShortcut;
+  useEffect(() => {
+    if (!newOrderShortcut) return;
+    openNew();
+    navigate(`${location.pathname}${location.search}${location.hash}`, { replace: true, state: null });
+  }, [location.hash, location.pathname, location.search, navigate, newOrderShortcut, openNew]);
   const today = localDateValue();
   const shownOrders = useMemo(() => orders.filter((order) => {
     if (isTrocas && !["TROCA", "DEVOLUCAO"].includes(order.type)) return false;
@@ -221,12 +231,21 @@ export default function Orders({ mode }) {
         || (event.code === "Equal" && event.shiftKey);
       if (event.ctrlKey && isPlus) {
         event.preventDefault();
+        pendingProductFocusIndex.current = editing?.items?.length || 0;
         addItem();
       }
     };
     window.addEventListener("keydown", handleShortcut);
     return () => window.removeEventListener("keydown", handleShortcut);
-  }, [addItem, open]);
+  }, [addItem, editing?.items?.length, open]);
+  useEffect(() => {
+    const index = pendingProductFocusIndex.current;
+    if (!open || index === null) return;
+    const productSearch = document.querySelector(`[data-testid="order-product-${index}"]`);
+    if (!productSearch) return;
+    pendingProductFocusIndex.current = null;
+    productSearch.focus();
+  }, [open, editing?.items?.length]);
   const setItem = (i, patch) => setEditing(e => {
     const items = [...e.items]; items[i] = { ...items[i], ...patch }; return { ...e, items };
   });
@@ -829,7 +848,15 @@ export default function Orders({ mode }) {
 
       {/* Editor Sheet */}
       <Sheet open={open} onOpenChange={setOpen}>
-        <SheetContent className="w-full md:max-w-4xl overflow-y-auto">
+        <SheetContent
+          className="w-full md:max-w-4xl overflow-y-auto"
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && event.target instanceof HTMLSelectElement) {
+              const field = event.target;
+              window.setTimeout(() => focusNextField(field), 0);
+            }
+          }}
+        >
           <SheetHeader><SheetTitle className="lokal-stencil">{editing?.id?`Pedido #${editing.number}`:"Novo Pedido"}</SheetTitle></SheetHeader>
           {editing && (
             <div className="space-y-3 mt-4">

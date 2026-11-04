@@ -3,24 +3,31 @@ import { CrudPage } from "@/components/CrudPage";
 import { api, formatBRL, formatDateShort } from "@/lib/api";
 import { toast } from "sonner";
 import useSubmitLock from "@/hooks/useSubmitLock";
+import CustomerAddressFields from "@/components/CustomerAddressFields";
+import { formatCustomerPhone } from "@/lib/customerFields";
 
 const sumBox = (label, value) => (
   <div className="lokal-panel p-3 mt-3 text-right font-mono text-sm" data-testid="total-box">{label}: <b>{value}</b></div>
 );
 
 export function Customers() {
+  const sortByCustomerName = (first, second) => first.name.localeCompare(second.name, "pt-BR", { sensitivity: "base" });
   return (
     <CrudPage title="Clientes" subtitle="Cadastro de clientes militares e lojas" endpoint="customers" testid="customers"
+      defaults={{ phone: "", cep: "", address_number: "", address: "", distance_km: 0 }}
+      sortRows={sortByCustomerName}
+      prepareEdit={(customer) => ({ ...customer, phone: formatCustomerPhone(customer.phone) })}
       fields={[
         { key: "name", label: "Nome / Loja", required: true, wide: true },
         { key: "cpf", label: "CPF / CNPJ" },
-        { key: "phone", label: "Telefone" },
-        { key: "address", label: "Endereço", wide: true },
+        { key: "phone", label: "Celular", onChange: (value) => ({ phone: formatCustomerPhone(value) }) },
+        { key: "address", label: "CEP e endereço", wide: true, render: (props) => <CustomerAddressFields {...props} /> },
         { key: "distance_km", label: "KM do depósito até o endereço", type: "number" },
       ]}
       columns={[
         { key: "name", label: "NOME / LOJA" }, { key: "cpf", label: "CPF" },
-        { key: "phone", label: "TELEFONE" }, { key: "address", label: "ENDEREÇO" }, { key: "distance_km", label: "KM DO DEPÓSITO" },
+        { key: "phone", label: "CELULAR", render: (customer) => formatCustomerPhone(customer.phone) },
+        { key: "address", label: "ENDEREÇO" }, { key: "distance_km", label: "KM DO DEPÓSITO" },
       ]} />
   );
 }

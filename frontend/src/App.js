@@ -1,5 +1,6 @@
 import "@/App.css";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import React, { useEffect, useRef } from "react";
+import { BrowserRouter, Routes, Route, useNavigate, useLocation } from "react-router-dom";
 import { Toaster } from "@/components/ui/sonner";
 import { AuthProvider } from "@/contexts/AuthContext";
 import AppLayout from "@/components/layout/AppLayout";
@@ -12,10 +13,31 @@ import Commissions from "@/pages/Commissions";
 import Settings from "@/pages/Settings";
 import { Customers, Categories, Suppliers, Vehicles, Insumos, Viagens, Manutencao } from "@/pages/SimplePages";
 
+function GlobalShortcuts() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const requestId = useRef(0);
+
+  useEffect(() => {
+    const handleShortcut = (event) => {
+      if (event.ctrlKey && event.altKey && event.key.toLowerCase() === "p" && location.pathname !== "/login") {
+        event.preventDefault();
+        requestId.current += 1;
+        navigate("/pedidos", { state: { newOrderShortcut: requestId.current } });
+      }
+    };
+    window.addEventListener("keydown", handleShortcut);
+    return () => window.removeEventListener("keydown", handleShortcut);
+  }, [location.pathname, navigate]);
+
+  return null;
+}
+
 function App() {
   return (
     <AuthProvider>
       <BrowserRouter>
+        <GlobalShortcuts />
         <Routes>
           <Route path="/login" element={<Login />} />
           <Route element={<AppLayout />}>

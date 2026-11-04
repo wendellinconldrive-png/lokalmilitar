@@ -4,8 +4,9 @@ import { toast } from "sonner";
 import { Plus, Edit, Trash2 } from "lucide-react";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import useSubmitLock from "@/hooks/useSubmitLock";
+import { focusNextField } from "@/lib/keyboardNavigation";
 
-export const CrudPage = ({ title, subtitle, endpoint, fields, columns, defaults = {}, filter, testid, footer, rowActions, prepareEdit, headerContent, onSaved }) => {
+export const CrudPage = ({ title, subtitle, endpoint, fields, columns, defaults = {}, filter, testid, footer, rowActions, prepareEdit, headerContent, onSaved, sortRows }) => {
   const [rows, setRows] = useState([]);
   const [editing, setEditing] = useState(null);
   const [search, setSearch] = useState("");
@@ -40,7 +41,8 @@ export const CrudPage = ({ title, subtitle, endpoint, fields, columns, defaults 
     }
   };
 
-  const shown = rows.filter((r) => !search || JSON.stringify(r).toLowerCase().includes(search.toLowerCase()));
+  const sortedRows = sortRows ? [...rows].sort(sortRows) : rows;
+  const shown = sortedRows.filter((r) => !search || JSON.stringify(r).toLowerCase().includes(search.toLowerCase()));
   const resolvedHeaderContent = typeof headerContent === "function" ? headerContent({ rows, shown }) : headerContent;
 
   return (
@@ -87,7 +89,9 @@ export const CrudPage = ({ title, subtitle, endpoint, fields, columns, defaults 
               {fields.filter((f) => !(typeof f.hidden === "function" ? f.hidden(editing) : f.hidden)).map((f) => (
                 <label key={f.key} className={f.wide ? "md:col-span-2" : ""}>
                   <div className="text-[11px] font-mono text-neutral-500 mb-1">{f.label}{f.required ? " *" : ""}</div>
-                  {f.type === "multiselect" ? (
+                  {f.render ? (
+                    f.render({ editing, setEditing })
+                  ) : f.type === "multiselect" ? (
                     <div className="crud-input space-y-1">
                       {(typeof f.options === "function" ? f.options(editing) : f.options || []).map((option) => {
                         const value = option.value ?? option;
@@ -116,6 +120,11 @@ export const CrudPage = ({ title, subtitle, endpoint, fields, columns, defaults 
                     <select className="crud-input" value={editing[f.key] ?? ""} onChange={(e) => {
                       const value = e.target.value;
                       setEditing({ ...editing, ...(f.onChange ? f.onChange(value, editing) : { [f.key]: value }) });
+                    }} onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        const field = event.currentTarget;
+                        window.setTimeout(() => focusNextField(field), 0);
+                      }
                     }} data-testid={`field-${f.key}`}>
                       <option value="">—</option>
                       {(typeof f.options === "function" ? f.options(editing) : f.options || []).map((o) => <option key={o.value ?? o} value={o.value ?? o}>{o.label ?? o}</option>)}

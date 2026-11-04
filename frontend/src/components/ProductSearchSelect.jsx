@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from "react";
 import { Search } from "lucide-react";
+import { focusNextField } from "@/lib/keyboardNavigation";
 
 export default function ProductSearchSelect({
   products,
@@ -20,10 +21,11 @@ export default function ProductSearchSelect({
       !search || `${product.name || ""} ${product.sku || ""}`.toLocaleLowerCase().includes(search)
     )).slice(0, 100);
   }, [products, query]);
-  const selectOption = (product) => {
+  const selectOption = (product, advance = false, input) => {
     onChange(product.id);
     setQuery("");
     setFocused(false);
+    if (advance) window.setTimeout(() => focusNextField(input), 0);
   };
   const handleKeyDown = (event) => {
     if (event.key === "ArrowDown" && options.length) {
@@ -34,7 +36,7 @@ export default function ProductSearchSelect({
       setActiveIndex((index) => (index - 1 + options.length) % options.length);
     } else if (event.key === "Enter" && focused && options[activeIndex]) {
       event.preventDefault();
-      selectOption(options[activeIndex]);
+      selectOption(options[activeIndex], true, event.currentTarget);
     } else if (event.key === "Escape" && focused) {
       event.preventDefault();
       setFocused(false);
@@ -49,7 +51,13 @@ export default function ProductSearchSelect({
         className={`${inputClassName} lm-search-input w-full`}
         value={focused ? query : selectedProduct ? `${selectedProduct.name} (${selectedProduct.sku})` : ""}
         placeholder={placeholder}
-        onFocus={() => { setQuery(""); setActiveIndex(0); setFocused(true); }}
+        onFocus={(event) => {
+          const currentValue = selectedProduct ? selectedProduct.name : "";
+          setQuery(currentValue);
+          setActiveIndex(0);
+          setFocused(true);
+          event.currentTarget.select();
+        }}
         onBlur={() => setFocused(false)}
         onChange={(event) => { setQuery(event.target.value); setActiveIndex(0); }}
         onKeyDown={handleKeyDown}

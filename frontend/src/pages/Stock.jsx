@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api, formatBRL, formatDate } from "@/lib/api";
 import { toast } from "sonner";
-import { Download, Upload, Printer, FileText, FileSpreadsheet, Search, Trash2, ExternalLink, Plus, ChevronRight } from "lucide-react";
+import { Download, Upload, Printer, FileText, FileSpreadsheet, Search, Trash2, ExternalLink, Plus, ChevronRight, Tag } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import ProductSearchSelect from "@/components/ProductSearchSelect";
 import useSubmitLock from "@/hooks/useSubmitLock";
@@ -51,6 +51,44 @@ const openPrint = (title, rows) => {
     <tbody>${tableRows}</tbody></table>
     <script>window.onload=()=>window.print()</script></body></html>`);
   w.document.close();
+};
+
+const printShelfLabels = (rows) => {
+  if (!rows.length) return toast.error("Não há tamanhos com estoque para imprimir etiquetas");
+  const printWindow = window.open("", "_blank");
+  if (!printWindow) return toast.error("Permita pop-ups para imprimir etiquetas");
+  const labels = rows.map((row) => `
+    <article class="shelf-label">
+      <div class="label-brand">LOKAL MILITAR</div>
+      <div class="label-name">${escapeHtml(row.name)}</div>
+      <div class="label-category">${escapeHtml(row.cat)}</div>
+      <div class="label-details">
+        <span class="label-size">TAM. ${escapeHtml(row.size)}</span>
+        <span class="label-price">${escapeHtml(formatBRL(row.price))}</span>
+      </div>
+      <div class="label-footer">
+        <span>SKU: ${escapeHtml(row.sku)}</span>
+        <span>PRAT.: ${escapeHtml(row.shelf || "—")}</span>
+      </div>
+    </article>`).join("");
+  printWindow.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Etiquetas de prateleira</title>
+    <style>
+      @page{size:A4 portrait;margin:7mm}
+      *{box-sizing:border-box}
+      body{margin:0;color:#171717;font-family:Arial,sans-serif}
+      .label-sheet{display:grid;grid-template-columns:repeat(3,63.5mm);grid-auto-rows:38.1mm;column-gap:2.5mm;row-gap:0}
+      .shelf-label{height:38.1mm;padding:2.5mm;border:.25mm solid #555;display:flex;flex-direction:column;overflow:hidden;break-inside:avoid}
+      .label-brand{font-size:7pt;letter-spacing:1.2px;font-weight:800;color:#4B5320;border-bottom:.3mm solid #4B5320;padding-bottom:1mm}
+      .label-name{font-size:11pt;font-weight:800;line-height:1.1;margin-top:1.4mm;max-height:8mm;overflow:hidden}
+      .label-category{font-size:7pt;color:#555;margin-top:.7mm;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+      .label-details{display:flex;align-items:center;justify-content:space-between;margin-top:auto}
+      .label-size{font-size:10pt;font-weight:800}
+      .label-price{font-size:14pt;font-weight:800;white-space:nowrap}
+      .label-footer{display:flex;justify-content:space-between;gap:2mm;margin-top:1mm;padding-top:1mm;border-top:.2mm solid #aaa;font-size:6.5pt;white-space:nowrap}
+      @media print{body{print-color-adjust:exact;-webkit-print-color-adjust:exact}}
+    </style></head><body><main class="label-sheet">${labels}</main>
+    <script>window.onload=()=>window.print()</script></body></html>`);
+  printWindow.document.close();
 };
 
 export default function Stock() {
@@ -377,7 +415,7 @@ export default function Stock() {
       <div className="lm-table-wrap overflow-x-auto">
         {tab === "posicao" ? (
           <table className="lm-table">
-            <thead><tr><th>SKU</th><th>Produto</th><th>Categoria</th><th>Tamanho</th><th>Qtd</th><th>Custo</th><th>Venda</th><th>Local</th></tr></thead>
+            <thead><tr><th>SKU</th><th>Produto</th><th>Categoria</th><th>Tamanho</th><th>Qtd</th><th>Custo</th><th>Venda</th><th>Local</th><th>Ações</th></tr></thead>
             <tbody>
               {groupedRows.map(({ id, variants, product: r }) => {
                 const isGroup = variants.length > 1;
@@ -414,6 +452,18 @@ export default function Stock() {
                       <td><span className="chip">{isGroup ? `${variants.length} variedades` : r.size}</span></td>
                       <td><span className={`chip ${groupIsLow ? "chip-low" : ""}`}>{groupStock}</span></td>
                       <td>{formatBRL(r.cost)}</td><td>{formatBRL(r.price)}</td><td>{r.shelf}</td>
+                      <td>
+                        <button
+                          type="button"
+                          className="p-1.5 hover:bg-[#E8E2D5] rounded"
+                          title="Imprimir etiqueta(s) de prateleira"
+                          aria-label={`Imprimir etiquetas de ${r.name}`}
+                          onClick={() => printShelfLabels(variants.filter((variant) => variant.stock > 0))}
+                          data-testid={`print-shelf-label-${id}`}
+                        >
+                          <Tag size={15} />
+                        </button>
+                      </td>
                     </tr>
                     {isGroup && isExpanded && variants.map((variant) => (
                       <tr key={variant.id} className="bg-black/[0.03]">
@@ -423,12 +473,24 @@ export default function Stock() {
                         <td><span className="chip">{variant.size}</span></td>
                         <td><span className={`chip ${variant.min > 0 && variant.stock <= variant.min ? "chip-low" : ""}`}>{variant.stock}</span></td>
                         <td>{formatBRL(variant.cost)}</td><td>{formatBRL(variant.price)}</td><td>{variant.shelf}</td>
+                        <td>
+                          <button
+                            type="button"
+                            className="p-1.5 hover:bg-[#E8E2D5] rounded"
+                            title="Imprimir etiqueta deste tamanho"
+                            aria-label={`Imprimir etiqueta de ${variant.name}, tamanho ${variant.size}`}
+                            onClick={() => printShelfLabels([variant])}
+                            data-testid={`print-shelf-label-${variant.id}`}
+                          >
+                            <Tag size={15} />
+                          </button>
+                        </td>
                       </tr>
                     ))}
                   </React.Fragment>
                 );
               })}
-              {rows.length === 0 && <tr><td colSpan={8} className="text-center text-neutral-500 py-8">Nenhum item.</td></tr>}
+              {rows.length === 0 && <tr><td colSpan={9} className="text-center text-neutral-500 py-8">Nenhum item.</td></tr>}
             </tbody>
           </table>
         ) : (

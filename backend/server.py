@@ -16,11 +16,15 @@ import io
 import tempfile
 import zipfile
 import zlib
+import time
+import threading
+from functools import lru_cache
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Any
 from requests.exceptions import RequestException
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
+import requests
 from fastapi import (
     APIRouter,
     Body,
@@ -58,6 +62,8 @@ from google_calendar import (
 
 FUEL_TYPES = ("Gasolina", "Etanol", "Diesel", "GNV")
 DEFAULT_FUEL_PRICES = {fuel_type: 0 for fuel_type in FUEL_TYPES}
+DEFAULT_DEPOT_ADDRESS = "RUA SALUSTIANO SILVA 550, CEP 21745590"
+LEGACY_DEFAULT_DEPOT_ADDRESS = "Rua Salustiano Silva, Nº 550, H - 21745590 - Rio de Janeiro, RJ"
 RESET_GROUPS = {
     "orders": "Pedidos, comissões e registros vinculados",
     "inventory": "Produtos, categorias, grades e movimentações de estoque",
@@ -335,12 +341,18 @@ class Customer(BaseModel):
     cpf: Optional[str] = None
     patente_om: Optional[str] = None
     phone: Optional[str] = None
+    cep: Optional[str] = None
+    address_number: Optional[str] = None
     address: Optional[str] = None
     distance_km: float = 0
     signature: Optional[str] = None
     sizes_fit: Optional[str] = None
     total_spent: float = 0
     created_at: str = Field(default_factory=now_iso)
+
+class CustomerDistanceInput(BaseModel):
+    address: str = Field(min_length=3, max_length=500)
+    cep: str = Field(min_length=8, max_length=9)
 
 class OrderItem(BaseModel):
     product_id: str
@@ -498,7 +510,7 @@ class Settings(BaseModel):
     cnpj: str = "27.863.152/0001-74"
     phone: str = "(21) 00000-0000"
     instagram: str = "@lokalmilitar"
-    address: str = "Rua Salustiano Silva, Nº 550, H - 21745590 - Rio de Janeiro, RJ"
+    address: str = DEFAULT_DEPOT_ADDRESS
     pix_key: str = ""
     fuel_prices: dict = Field(default_factory=lambda: DEFAULT_FUEL_PRICES.copy())
     background_color: str = "#F5F5F5"
@@ -941,6 +953,99 @@ async def delete_user(uid: str, user: dict = Depends(require_admin)):
     return {"deleted": 1}
 
 # ---------- Mount generic CRUDs ----------
+_nominatim_lock = threading.Lock()
+_nominatim_last_request = 0.0
+
+@lru_cache(maxsize=256)
+def _geocode_address(address: str):
+    global _nominatim_last_request
+    with _nominatim_lock:
+        wait = 1.0 - (time.monotonic() - _nominatim_last_request)
+        if wait > 0:
+            time.sleep(wait)
+        try:
+            response = requests.get(
+                "https://nominatim.openstreetmap.org/search",
+                params={"q": address, "format": "jsonv2", "limit": 1, "countrycodes": "br"},
+                headers={"User-Agent": "LokalMilitar/1.0 (customer address distance lookup)"},
+                timeout=10,
+            )
+            _nominatim_last_request = time.monotonic()
+            response.raise_for_status()
+            results = response.json()
+        except RequestException as error:
+            _nominatim_last_request = time.monotonic()
+            raise HTTPException(503, "Serviço de localização indisponível") from error
+        except ValueError as error:
+            raise HTTPException(502, "Resposta inválida do serviço de localização") from error
+
+    if not results:
+        raise HTTPException(404, "Não foi possível localizar este endereço")
+    try:
+        return float(results[0]["lat"]), float(results[0]["lon"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise HTTPException(502, "Coordenadas inválidas no serviço de localização") from error
+
+@api.get("/customers/cep/{cep}")
+async def lookup_customer_cep(cep: str, user: dict = Depends(get_current_user)):
+    normalized_cep = "".join(character for character in cep if character.isdigit())
+    if len(normalized_cep) != 8:
+        raise HTTPException(400, "Informe um CEP válido com 8 dígitos")
+    try:
+        response = await asyncio.to_thread(
+            requests.get, f"https://viacep.com.br/ws/{normalized_cep}/json/", timeout=8
+        )
+        response.raise_for_status()
+        data = response.json()
+    except RequestException as error:
+        raise HTTPException(503, "Não foi possível consultar o CEP agora") from error
+    except ValueError as error:
+        raise HTTPException(502, "Resposta inválida ao consultar o CEP") from error
+    if data.get("erro"):
+        raise HTTPException(404, "CEP não encontrado")
+    return {
+        "cep": normalized_cep,
+        "logradouro": data.get("logradouro", ""),
+        "bairro": data.get("bairro", ""),
+        "localidade": data.get("localidade", ""),
+        "uf": data.get("uf", ""),
+    }
+
+@api.post("/customers/distance")
+async def calculate_customer_distance(payload: CustomerDistanceInput, user: dict = Depends(get_current_user)):
+    cep = "".join(character for character in payload.cep if character.isdigit())
+    if len(cep) != 8:
+        raise HTTPException(400, "Informe um CEP válido com 8 dígitos")
+    destination_address = f"{payload.address}, CEP {cep}, Brasil"
+    origin, destination = await asyncio.gather(
+        asyncio.to_thread(_geocode_address, f"{DEFAULT_DEPOT_ADDRESS}, Rio de Janeiro, RJ, Brasil"),
+        asyncio.to_thread(_geocode_address, destination_address),
+    )
+    coordinates = f"{origin[1]},{origin[0]};{destination[1]},{destination[0]}"
+    try:
+        response = await asyncio.to_thread(
+            requests.get,
+            f"https://router.project-osrm.org/route/v1/driving/{coordinates}",
+            params={"overview": "false", "steps": "false"},
+            timeout=15,
+        )
+        response.raise_for_status()
+        route_data = response.json()
+    except RequestException as error:
+        raise HTTPException(503, "Serviço de cálculo de rotas indisponível") from error
+    except ValueError as error:
+        raise HTTPException(502, "Resposta inválida ao calcular a rota") from error
+    routes = route_data.get("routes", [])
+    if route_data.get("code") != "Ok" or not routes:
+        raise HTTPException(404, "Não foi possível calcular uma rota para este endereço")
+    try:
+        distance_km = float(routes[0]["distance"]) / 1000
+    except (KeyError, TypeError, ValueError) as error:
+        raise HTTPException(502, "Distância inválida na resposta do serviço de rotas") from error
+    if not math.isfinite(distance_km) or distance_km < 0:
+        raise HTTPException(502, "Distância inválida na resposta do serviço de rotas")
+    return {"distance_km": round(distance_km, 1)}
+
 api.include_router(make_crud("categories", Category))
 api.include_router(make_crud("size_grids", SizeGrid))
 api.include_router(make_crud("suppliers", Supplier))
@@ -1953,6 +2058,9 @@ async def get_settings(user: dict = Depends(get_current_user)):
         s = Settings().model_dump()
         await db.settings.insert_one(s)
         return strip_mongo(s)
+    if doc.get("address") == LEGACY_DEFAULT_DEPOT_ADDRESS:
+        await db.settings.update_one({"id": "singleton"}, {"$set": {"address": DEFAULT_DEPOT_ADDRESS}})
+        doc["address"] = DEFAULT_DEPOT_ADDRESS
     return doc
 
 @api.put("/settings")
