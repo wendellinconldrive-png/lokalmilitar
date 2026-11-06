@@ -2675,7 +2675,7 @@ async def delete_dashboard_event(event_id: str, user: dict = Depends(require_adm
 async def dashboard_pending(user: dict = Depends(get_current_user)):
     today = datetime.now(ZoneInfo("America/Sao_Paulo")).date()
     soon = today + timedelta(days=30)
-    events, orders, maintenance = await asyncio.gather(
+    events, orders, maintenance, products = await asyncio.gather(
         db.dashboard_events.find({"archived": {"$ne": True}}, {"_id": 0}).to_list(500),
         db.orders.find(
             {"status": {"$nin": ["Entregue", "Retirado", "Cancelado"]}},
@@ -2685,6 +2685,10 @@ async def dashboard_pending(user: dict = Depends(get_current_user)):
             {"type": "MANUTENCAO", "next_review_date": {"$exists": True, "$nin": [None, ""]}},
             {"_id": 0, "id": 1, "description": 1, "vehicle_model": 1, "plate": 1, "next_review_date": 1},
         ).to_list(1000),
+        db.products.find(
+            {},
+            {"_id": 0, "id": 1, "name": 1, "sizes": 1, "linked_ids": 1},
+        ).to_list(5000),
     )
     items = []
     for event in events:
@@ -2724,6 +2728,47 @@ async def dashboard_pending(user: dict = Depends(get_current_user)):
             "date": review_date,
             "url": "/manutencao",
         })
+    products_by_id = {product["id"]: product for product in products}
+    for product in products:
+        component_ids = product.get("linked_ids") or []
+        if not component_ids:
+            continue
+        component_counts = {}
+        for component_id in component_ids:
+            component_counts[component_id] = component_counts.get(component_id, 0) + 1
+        components = [products_by_id.get(component_id) for component_id in component_counts]
+        if any(component is None for component in components):
+            continue
+        component_names = [products_by_id[component_id].get("name") or "Produto" for component_id in component_ids]
+        for size in product.get("sizes", []):
+            size_name = size.get("size")
+            component_availability = []
+            for component_id, required_quantity in component_counts.items():
+                component = products_by_id[component_id]
+                component_size = next(
+                    (entry for entry in component.get("sizes", []) if entry.get("size") == size_name),
+                    None,
+                )
+                if component_size is None:
+                    component_availability.append(0)
+                    continue
+                component_availability.append(
+                    math.floor(float(component_size.get("stock") or 0) / required_quantity)
+                )
+            mountable_quantity = min(component_availability, default=0)
+            if mountable_quantity <= 0:
+                continue
+            items.append({
+                "id": f"assembly:{product['id']}:{size_name}",
+                "type": "montagem",
+                "title": f"Pode montar: {product.get('name') or 'Produto'}",
+                "body": (
+                    f"Tamanho {size_name} · até {mountable_quantity} unidade(s) "
+                    f"com {', '.join(component_names)}"
+                ),
+                "date": "",
+                "url": "/produtos",
+            })
     items.sort(key=lambda item: (item["date"] or "9999-12-31", item["type"], item["title"]))
     return {"items": items}
 

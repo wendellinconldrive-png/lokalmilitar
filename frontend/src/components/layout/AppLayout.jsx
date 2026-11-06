@@ -203,7 +203,7 @@ export default function AppLayout() {
         <DialogContent className="max-h-[85vh] overflow-y-auto" data-testid="pending-items-dialog">
           <DialogHeader>
             <DialogTitle className="font-head">Pendências do sistema</DialogTitle>
-            <DialogDescription>Confira anotações, pedidos em aberto e manutenções programadas.</DialogDescription>
+            <DialogDescription>Confira anotações, pedidos em aberto, manutenções programadas e produtos que podem ser montados.</DialogDescription>
           </DialogHeader>
           <div className="space-y-2">
             {pendingItems.map((item) => (
@@ -218,7 +218,13 @@ export default function AppLayout() {
                 data-testid={`pending-item-${item.type}`}
               >
                 <span className="block text-xs uppercase text-neutral-500">
-                  {item.type === "anotacao" ? "Anotação" : item.type === "pedido" ? "Pedido" : "Manutenção"}
+                  {item.type === "anotacao"
+                    ? "Anotação"
+                    : item.type === "pedido"
+                      ? "Pedido"
+                      : item.type === "montagem"
+                        ? "Montagem disponível"
+                        : "Manutenção"}
                   {item.date ? ` · ${new Date(`${item.date}T00:00:00`).toLocaleDateString("pt-BR")}` : ""}
                 </span>
                 <span className="block font-semibold">{item.title}</span>
