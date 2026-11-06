@@ -304,6 +304,57 @@ class TestOrders:
         assert _stock(admin, product["id"], "U") == 2
         assert separated.json()["stock_applied"] is True
 
+    def test_order_cannot_be_separated_or_fulfilled_without_stock_or_disassembly_source(self, admin):
+        product = _prod(admin, "TEST_Estoque_Insuficiente", [{"size": "U", "stock": 1}])
+        response = admin.post(
+            f"{BASE_URL}/api/orders",
+            json={
+                "customer_name": "TEST_Estoque_Insuficiente",
+                "items": [
+                    {
+                        "product_id": product["id"],
+                        "name": product["name"],
+                        "size": "U",
+                        "qty": 1,
+                        "unit_price": 10,
+                    },
+                    {
+                        "product_id": product["id"],
+                        "name": product["name"],
+                        "size": "U",
+                        "qty": 1,
+                        "unit_price": 10,
+                    },
+                ],
+            },
+        )
+        assert response.status_code == 200, response.text
+        order = response.json()
+        CREATED["orders"].append(order["id"])
+
+        separated = admin.put(
+            f"{BASE_URL}/api/orders/{order['id']}",
+            json={"status": "Separado"},
+        )
+        assert separated.status_code == 400
+        assert "Estoque insuficiente" in separated.json()["detail"]
+        assert _stock(admin, product["id"], "U") == 1
+
+        fulfilled = admin.post(
+            f"{BASE_URL}/api/orders/{order['id']}/fulfill",
+            json={"delivery_type": "RETIRADA"},
+        )
+        assert fulfilled.status_code == 400
+        assert "Estoque insuficiente" in fulfilled.json()["detail"]
+        current_order = admin.get(f"{BASE_URL}/api/orders/{order['id']}").json()
+        assert current_order["status"] == "Anotado"
+        assert _stock(admin, product["id"], "U") == 1
+        assert not [
+            movement
+            for movement in admin.get(f"{BASE_URL}/api/stock_movements").json()
+            if movement.get("order_id") == order["id"]
+        ]
+
     def test_concurrent_order_fulfillments_preserve_stock_and_movements(self, admin):
         product = _prod(admin, "TEST_Baixa_Concorrente", [{"size": "U", "stock": 20}])
         orders = []

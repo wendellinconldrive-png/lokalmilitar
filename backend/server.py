@@ -1306,26 +1306,35 @@ async def delete_product(pid: str, user: dict = Depends(get_current_user)):
     await db.products.delete_one({"id": pid})
     return {"deleted": 1}
 
-async def _change_stock(product_id: str, size: Optional[str], delta: float):
+async def _change_stock(product_id: str, size: Optional[str], delta: float, prevent_negative: bool = False):
     """Adjust product size stock by delta (positive=add, negative=subtract)."""
     size_key = size if size is not None else "-"
+    size_filter = {"size": size_key}
+    if prevent_negative and delta < 0:
+        size_filter["stock"] = {"$gte": -delta}
+    size_query = (
+        {"sizes": {"$elemMatch": size_filter}}
+        if prevent_negative and delta < 0
+        else {"sizes.size": size_key}
+    )
     result = await db.products.update_one(
-        {"id": product_id, "sizes.size": size_key},
+        {"id": product_id, **size_query},
         {"$inc": {"sizes.$.stock": delta}},
     )
     if result.matched_count:
         return True
 
-    result = await db.products.update_one(
-        {"id": product_id, "sizes.size": {"$ne": size_key}},
-        {"$push": {"sizes": {"size": size_key, "stock": delta, "stock_min": 0}}},
-    )
-    if result.matched_count:
-        return True
+    if delta >= 0 or not prevent_negative:
+        result = await db.products.update_one(
+            {"id": product_id, "sizes.size": {"$ne": size_key}},
+            {"$push": {"sizes": {"size": size_key, "stock": delta, "stock_min": 0}}},
+        )
+        if result.matched_count:
+            return True
 
     # Another request may have added this size between the two atomic updates.
     result = await db.products.update_one(
-        {"id": product_id, "sizes.size": size_key},
+        {"id": product_id, **size_query},
         {"$inc": {"sizes.$.stock": delta}},
     )
     if result.matched_count:
@@ -1336,8 +1345,9 @@ async def _stock_of(product_id: str, size: Optional[str]) -> float:
     p = await db.products.find_one({"id": product_id})
     if not p:
         return 0
+    size_key = size if size is not None else "-"
     for s in p.get("sizes", []):
-        if s.get("size") == size:
+        if s.get("size") == size_key:
             return float(s.get("stock", 0))
     return 0
 
@@ -1349,9 +1359,9 @@ async def _log_mov(prod: dict, size, qty, kind, reason, order_id=None):
         "reason": reason, "order_id": order_id, "created_at": now_iso()
     })
 
-async def _desmontar(parent: dict, size, reason: str, order_id=None) -> List[str]:
+async def _desmontar(parent: dict, size, reason: str, order_id=None, prevent_negative: bool = False) -> List[str]:
     """Remove 1 parent unit of `size` and add 1 of each linked product of the same size."""
-    await _change_stock(parent["id"], size, -1)
+    await _change_stock(parent["id"], size, -1, prevent_negative=prevent_negative)
     await _log_mov(parent, size, 1, "DESMONTAGEM_SAIDA", reason, order_id)
     names = []
     for cid in parent.get("linked_ids", []):
@@ -1407,13 +1417,19 @@ async def _montar(parent: dict, size, reason: str) -> List[str]:
 
 async def _cover_shortage(prod: dict, size, qty: float, order: dict, log: List[str]):
     """If stock is insufficient, disassemble linked parent products of the same size."""
-    missing = qty - max(await _stock_of(prod["id"], size), 0)
+    missing = qty - await _stock_of(prod["id"], size)
     if missing <= 0:
         return
     parents = await db.products.find({"linked_ids": prod["id"]}, {"_id": 0}).to_list(100)
     for parent in parents:
         while missing > 0 and await _stock_of(parent["id"], size) > 0:
-            names = await _desmontar(parent, size, f"Desmontagem automática p/ pedido #{order.get('number')}", order["id"])
+            names = await _desmontar(
+                parent,
+                size,
+                f"Desmontagem automática p/ pedido #{order.get('number')}",
+                order["id"],
+                prevent_negative=True,
+            )
             log.append(f"{parent.get('name')} {size} desmontada → +1 {' / +1 '.join(names)}")
             missing -= 1
         if missing <= 0:
@@ -1649,6 +1665,56 @@ async def _validate_order_stock(order: dict):
             raise HTTPException(400, f"Tamanho não cadastrado para {product.get('name')}")
     return products_by_id
 
+async def _validate_order_stock_availability(order: dict, exclude_order_id: Optional[str] = None):
+    products_by_id = await _validate_order_stock(order)
+    sales = order.get("items", [])
+    product_ids = list(products_by_id)
+    parents = await db.products.find(
+        {"linked_ids": {"$in": product_ids}},
+        {"_id": 0},
+    ).to_list(10000) if product_ids else []
+    inventory = {}
+    for product in [*products_by_id.values(), *parents]:
+        for size in product.get("sizes", []):
+            size_key = size.get("size") if size.get("size") is not None else "-"
+            inventory.setdefault((product["id"], size_key), float(size.get("stock", 0)))
+
+    if exclude_order_id:
+        movements = await db.stock_movements.find({"order_id": exclude_order_id}).to_list(10000)
+        for movement in movements:
+            key = (movement.get("product_id"), _movement_stock_size(movement))
+            if key in inventory:
+                inventory[key] -= _stock_movement_delta(movement)
+
+    for item in sales:
+        product_id = item["product_id"]
+        size = item.get("size")
+        quantity = float(item.get("qty", 1))
+        key = (product_id, size if size is not None else "-")
+        available = inventory.get(key, 0)
+        missing = quantity - available
+        if missing > 0:
+            for parent in parents:
+                if product_id not in parent.get("linked_ids", []):
+                    continue
+                parent_key = (parent["id"], key[1])
+                while missing > 0 and inventory.get(parent_key, 0) > 0:
+                    inventory[parent_key] -= 1
+                    inventory[key] = inventory.get(key, 0) + 1
+                    missing -= 1
+                if missing <= 0:
+                    break
+        available = inventory.get(key, 0)
+        if available < quantity:
+            product = products_by_id[product_id]
+            raise HTTPException(
+                400,
+                f"Estoque insuficiente para {product.get('name')} "
+                f"(tamanho {size or '-'}): disponível {max(available, 0):g}, "
+                f"solicitado {quantity:g}",
+            )
+        inventory[key] = available - quantity
+
 async def _snapshot_order_commissions(items: list, previous_items: Optional[list] = None) -> list:
     product_ids = list(dict.fromkeys(item.get("product_id") for item in items if item.get("product_id")))
     products = await db.products.find(
@@ -1698,7 +1764,7 @@ async def _apply_order_stock(order: dict):
             size = item.get("size")
             quantity = float(item.get("qty", 1))
             product = products_by_id[item["product_id"]]
-            await _change_stock(product_id, size, -quantity)
+            await _change_stock(product_id, size, -quantity, prevent_negative=True)
             await _log_mov(
                 product,
                 size,
@@ -1714,7 +1780,7 @@ async def _apply_order_stock(order: dict):
             quantity = float(item.get("qty", 1))
             product = products_by_id[product_id]
             await _cover_shortage(product, size, quantity, order, log)
-            await _change_stock(product_id, size, -quantity)
+            await _change_stock(product_id, size, -quantity, prevent_negative=True)
             await _log_mov(
                 product,
                 size,
@@ -1858,7 +1924,7 @@ async def _sync_order_stock_to_status(order: dict):
             )
         return
 
-    await _validate_order_stock(order)
+    await _validate_order_stock_availability(order, exclude_order_id=order["id"])
     if order.get("stock_applied") is True:
         await _reset_incomplete_stock_application(order)
     if not await _claim_order_stock_application(order["id"]):
@@ -1868,6 +1934,8 @@ async def _sync_order_stock_to_status(order: dict):
             await _reverse_order_stock(order["id"], mark_unapplied=False)
         await _apply_order_stock(order)
     except Exception:
+        if await _has_order_stock_movements(order["id"]):
+            await _reverse_order_stock(order["id"], mark_unapplied=False)
         await _release_order_stock_claim(order["id"])
         raise
 
@@ -2002,6 +2070,8 @@ async def create_order(payload: dict, user: dict = Depends(get_current_user)):
         doc["separated_at"] = now_iso()
     if _order_is_fulfilled(doc):
         raise HTTPException(400, "Conclua o pedido pela ação Entregar/Retirar")
+    if _order_should_apply_stock(doc) and doc.get("type") in ("VENDA", "TROCA", "DEVOLUCAO"):
+        await _validate_order_stock_availability(doc)
     if not doc.get("customer_id"):
         customer_name = str(doc.get("customer_name") or "").strip()
         if customer_name:
@@ -2015,9 +2085,13 @@ async def create_order(payload: dict, user: dict = Depends(get_current_user)):
             doc["customer_id"] = customer["id"]
             doc["customer_name"] = customer["name"]
     await db.orders.insert_one(doc)
+    try:
+        await _sync_order_stock_to_status(doc)
+    except Exception:
+        await db.orders.delete_one({"id": doc["id"]})
+        raise
     if doc["status"] in ACTIVE_STATUSES and doc["type"] in ("VENDA",):
         await _record_commission(doc)
-    await _sync_order_stock_to_status(doc)
     return await db.orders.find_one({"id": doc["id"]}, {"_id": 0})
 
 async def _update_order(oid: str, payload: dict, user: dict, allow_fulfillment: bool = False):
@@ -2070,6 +2144,12 @@ async def _update_order(oid: str, payload: dict, user: dict, allow_fulfillment: 
         and candidate.get("type") in ("VENDA", "TROCA", "DEVOLUCAO")
     ):
         await _validate_order_stock(candidate)
+    if (
+        _order_should_apply_stock(candidate)
+        and candidate.get("type") in ("VENDA", "TROCA", "DEVOLUCAO")
+        and not await _order_stock_movements_match(candidate)
+    ):
+        await _validate_order_stock_availability(candidate, exclude_order_id=oid)
     if allow_fulfillment:
         update_result = await db.orders.update_one(
             {"id": oid, "status": old.get("status")},
@@ -2080,7 +2160,25 @@ async def _update_order(oid: str, payload: dict, user: dict, allow_fulfillment: 
     else:
         await db.orders.update_one({"id": oid}, {"$set": payload})
     doc = await db.orders.find_one({"id": oid}, {"_id": 0})
-    await _sync_order_stock_to_status(doc)
+    try:
+        await _sync_order_stock_to_status(doc)
+    except Exception:
+        restore_fields = {key: old[key] for key in payload if key in old}
+        unset_fields = {key: "" for key in payload if key not in old}
+        rollback_filter = {"id": oid, **{key: doc.get(key) for key in payload}}
+        rollback_update = {}
+        if restore_fields:
+            rollback_update["$set"] = restore_fields
+        if unset_fields:
+            rollback_update["$unset"] = unset_fields
+        if rollback_update:
+            rollback_result = await db.orders.update_one(rollback_filter, rollback_update)
+            if not rollback_result.matched_count:
+                raise HTTPException(
+                    409,
+                    "Não foi possível reverter a conclusão do pedido; atualize a tela e confira o status",
+                )
+        raise
     if _order_is_fulfilled(old) and not _order_is_fulfilled(doc):
         await _remove_order_delivery_trips(oid, user)
     doc = await db.orders.find_one({"id": oid}, {"_id": 0})
