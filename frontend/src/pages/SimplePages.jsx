@@ -143,6 +143,30 @@ const recalculateTrip = (trip, changes = {}) => {
   const fuelCost = hasFuelings
     ? fuelings.reduce((sum, fillup) => sum + Number(fillup.amount || 0), 0)
     : estimatedQuantity * price;
+  const fuelConsumptionByType = {};
+  if (consumption > 0 && km > 0) {
+    let remainingKm = km;
+    const fuelTypes = [
+      ...(updated.fuel_type ? [updated.fuel_type] : []),
+      ...fuelings.map((fillup) => fillup.fuel_type || updated.fuel_type)
+        .filter((fuelType, index, entries) => fuelType && entries.indexOf(fuelType) === index && fuelType !== updated.fuel_type),
+    ];
+    fuelTypes.forEach((fuelType) => {
+      const availableQuantity = hasFuelings
+        ? fuelQuantities[fuelType]?.quantity || 0
+        : estimatedQuantity;
+      const quantityUsed = Math.min(availableQuantity, remainingKm / consumption);
+      const distanceCovered = Math.min(remainingKm, quantityUsed * consumption);
+      if (quantityUsed > 0) {
+        fuelConsumptionByType[fuelType] = {
+          quantity: Math.round(quantityUsed * 100) / 100,
+          unit: fuelType === "GNV" ? "m³" : "L",
+          distance_km: Math.round(distanceCovered * 100) / 100,
+        };
+        remainingKm = Math.max(remainingKm - distanceCovered, 0);
+      }
+    });
+  }
   const tolls = updated.tolls || [];
   const tollCost = Array.isArray(updated.tolls)
     ? tolls.reduce((sum, toll) => sum + Number(toll.amount || 0), 0)
@@ -155,6 +179,7 @@ const recalculateTrip = (trip, changes = {}) => {
       { ...value, quantity: Math.round(value.quantity * 100) / 100 },
     ])),
     estimated_fuel_quantity: estimatedQuantity,
+    fuel_consumption_by_type: fuelConsumptionByType,
     fuel_quantity_unit: fuelUnit,
     fuel_liters: fuelUnit === "L" ? Math.round(quantity * 100) / 100 : 0,
     estimated_fuel_liters: fuelUnit === "L" ? estimatedQuantity : 0,
@@ -198,6 +223,8 @@ const printTripReport = (trip) => {
     ["Preço por unidade", formatBRL(trip.fuel_price_per_unit ?? trip.fuel_price_per_liter)],
     ["Quantidade abastecida", formatTripFuelQuantities(trip)],
     ["Consumo estimado", `${Number(trip.estimated_fuel_quantity ?? trip.estimated_fuel_liters ?? 0)} ${trip.fuel_quantity_unit || (trip.fuel_type === "GNV" ? "m³" : "L")}`],
+    ["Combustível consumido estimado", Object.entries(trip.fuel_consumption_by_type || {})
+      .map(([fuel, value]) => `${fuel}: ${value.quantity} ${value.unit} (${value.distance_km} km)`).join(" · ") || "—"],
     ["Gasto com combustível", formatBRL(trip.fuel_cost)],
     ["Total de pedágios", formatBRL(trip.toll_cost)],
     ["Diária", formatBRL(trip.daily_allowance)],
@@ -229,6 +256,9 @@ const printTripReport = (trip) => {
   const quantityRows = Object.entries(trip.fuel_quantities || {}).map(([fuel, value]) => [
     fuel, value.quantity, value.unit,
   ]);
+  const consumptionRows = Object.entries(trip.fuel_consumption_by_type || {}).map(([fuel, value]) => [
+    fuel, value.quantity, value.unit, `${value.distance_km} km`,
+  ]);
   printWindow.document.write(`<!doctype html><html><head><meta charset="utf-8">
     <title>Relatório do percurso · ${escapeReportHtml(trip.description || trip.id)}</title>
     <style>
@@ -249,6 +279,8 @@ const printTripReport = (trip) => {
     ${renderTable(["Combustível", "Valor gasto", "Preço por unidade", "Quantidade", "Litros"], fuelingRows, "Nenhum abastecimento detalhado.")}
     <h2>Quantidades por combustível</h2>
     ${renderTable(["Combustível", "Quantidade", "Unidade"], quantityRows, "Nenhuma quantidade discriminada por combustível.")}
+    <h2>Consumo estimado por combustível</h2>
+    ${renderTable(["Combustível", "Quantidade consumida", "Unidade", "Distância coberta"], consumptionRows, "Não foi possível estimar o consumo por combustível.")}
     <h2>Pedágios</h2>
     ${renderTable(["Praça / observação", "Valor"], tollRows, "Nenhum pedágio informado.")}
     <table><tbody><tr class="summary"><th>Total de despesas do percurso</th><td>${escapeReportHtml(formatBRL(totalCost))}</td></tr></tbody></table>
@@ -376,7 +408,12 @@ function TripFuelingsField({ editing, setEditing, fuelPrices, fuelTypes, recalcu
       {Object.entries(editing.fuel_quantities || {}).map(([fuel, value]) => (
         <p key={fuel} className="text-xs text-neutral-600">{fuel}: {value.quantity} {value.unit}</p>
       ))}
-      <p className="text-xs text-neutral-600">Cada abastecimento é calculado separadamente pelo combustível e preço por unidade. O consumo estimado usa o combustível principal selecionado acima.</p>
+      {Object.entries(editing.fuel_consumption_by_type || {}).map(([fuel, value]) => (
+        <p key={fuel} className="text-xs text-neutral-600">
+          Consumo estimado: {fuel}: {value.quantity} {value.unit} ({value.distance_km} km)
+        </p>
+      ))}
+      <p className="text-xs text-neutral-600">Cada abastecimento é calculado pelo combustível e preço por unidade. Se o abastecimento principal não cobrir todo o percurso, os combustíveis secundários registrados cobrem a distância restante usando o mesmo consumo médio cadastrado.</p>
     </div>
   );
 }

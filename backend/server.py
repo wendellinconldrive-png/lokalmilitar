@@ -285,6 +285,31 @@ async def _prepare_trip(doc: dict) -> dict:
         })
     doc["fuelings"] = fuelings
     doc["fuel_quantities"] = fuel_quantities
+    fuel_consumption_by_type = {}
+    if consumption > 0 and km > 0:
+        remaining_km = km
+        available_fuels = []
+        if doc.get("fuel_type"):
+            available_fuels.append(doc["fuel_type"])
+        available_fuels.extend(
+            fillup["fuel_type"] for fillup in fuelings
+            if fillup["fuel_type"] not in available_fuels
+        )
+        for fuel_type in available_fuels:
+            available_quantity = (
+                estimated_quantity if not fuelings
+                else fuel_quantities.get(fuel_type, {}).get("quantity", 0)
+            )
+            quantity_used = min(available_quantity, remaining_km / consumption)
+            distance_covered = min(remaining_km, quantity_used * consumption)
+            if quantity_used > 0:
+                fuel_consumption_by_type[fuel_type] = {
+                    "quantity": round(quantity_used, 2),
+                    "unit": "m³" if fuel_type == "GNV" else "L",
+                    "distance_km": round(distance_covered, 2),
+                }
+                remaining_km = max(remaining_km - distance_covered, 0)
+    doc["fuel_consumption_by_type"] = fuel_consumption_by_type
     if fuelings:
         doc["fuel_cost"] = round(sum(float(fillup["amount"]) for fillup in fuelings), 2)
         selected_quantity = fuel_quantities.get(doc.get("fuel_type"), {}).get("quantity", 0)
@@ -600,6 +625,7 @@ class Expense(BaseModel):
     fuel_quantity_unit: str = "L"
     fuel_price_per_unit: float = 0
     fuel_quantities: dict = Field(default_factory=dict)
+    fuel_consumption_by_type: dict = Field(default_factory=dict)
     km: float = 0
     odometer_km: Optional[float] = None
     day_close_date: Optional[str] = None
