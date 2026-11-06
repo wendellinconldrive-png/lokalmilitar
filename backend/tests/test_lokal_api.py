@@ -1191,8 +1191,42 @@ def test_vehicle_fuels_and_trip_cost_use_settings(admin):
     CREATED["expenses"].append(trip["id"])
     assert trip["avg_consumption"] == 12
     assert trip["fuel_liters"] == 10
+    assert trip["fuel_quantity"] == 10
+    assert trip["fuel_quantity_unit"] == "L"
     assert trip["fuel_price_per_liter"] == 6.5
     assert trip["fuel_cost"] == 65
+
+    gnv_vehicle_response = admin.post(
+        f"{BASE_URL}/api/vehicles",
+        json={
+            "name": f"TEST_GNV_{uuid.uuid4().hex[:6]}",
+            "avg_consumption": 25,
+            "fuel_types": ["GNV"],
+        },
+    )
+    assert gnv_vehicle_response.status_code == 200, gnv_vehicle_response.text
+    gnv_vehicle = gnv_vehicle_response.json()
+    CREATED["vehicles"].append(gnv_vehicle["id"])
+    gnv_trip_response = admin.post(
+        f"{BASE_URL}/api/expenses",
+        json={
+            "type": "VIAGEM",
+            "description": "TEST_Consumo GNV",
+            "vehicle_id": gnv_vehicle["id"],
+            "fuel_type": "GNV",
+            "km": 100,
+            "fuel_price_per_unit": 2,
+            "fuelings": [{"amount": 10, "price_per_unit": 2}],
+        },
+    )
+    assert gnv_trip_response.status_code == 200, gnv_trip_response.text
+    gnv_trip = gnv_trip_response.json()
+    CREATED["expenses"].append(gnv_trip["id"])
+    assert gnv_trip["fuel_quantity"] == 5
+    assert gnv_trip["fuel_quantity_unit"] == "m³"
+    assert gnv_trip["estimated_fuel_quantity"] == 4
+    assert gnv_trip["fuel_liters"] == 0
+    assert gnv_trip["fuel_cost"] == 10
 
     invalid_fuel = admin.post(
         f"{BASE_URL}/api/expenses",

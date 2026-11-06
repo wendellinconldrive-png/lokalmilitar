@@ -4,6 +4,7 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
 import os
+import re
 import uuid
 import secrets
 import hashlib
@@ -226,20 +227,24 @@ async def _prepare_trip(doc: dict) -> dict:
                 raise HTTPException(400, "Combustível não cadastrado para este veículo")
             doc["fuel_type"] = doc.get("fuel_type") or vehicle_fuels[0]
         doc["avg_consumption"] = float(doc.get("avg_consumption") or vehicle.get("avg_consumption") or 0)
+    fuel_unit = "m³" if doc.get("fuel_type") == "GNV" else "L"
     consumption = float(doc.get("avg_consumption") or 0)
     km = max(float(doc.get("km") or 0), 0)
-    estimated_liters = round(km / consumption, 2) if consumption > 0 else 0
-    doc["estimated_fuel_liters"] = estimated_liters
+    estimated_quantity = round(km / consumption, 2) if consumption > 0 else 0
+    doc["fuel_quantity_unit"] = fuel_unit
+    doc["estimated_fuel_quantity"] = estimated_quantity
+    doc["estimated_fuel_liters"] = estimated_quantity if fuel_unit == "L" else 0
     fillup_records = doc.get("fuelings") or []
     if not isinstance(fillup_records, list) or any(not isinstance(fillup, dict) for fillup in fillup_records):
         raise HTTPException(400, "A lista de abastecimentos é inválida")
-    price = max(float(doc.get("fuel_price_per_liter") or 0), 0)
+    price = max(float(doc.get("fuel_price_per_unit") or doc.get("fuel_price_per_liter") or 0), 0)
     settings = None
     if (price == 0 or fillup_records) and doc.get("fuel_type"):
         settings = await db.settings.find_one({"id": "singleton"}, {"_id": 0, "fuel_prices": 1})
     if price == 0 and doc.get("fuel_type"):
         price = max(float((settings or {}).get("fuel_prices", {}).get(doc["fuel_type"]) or 0), 0)
-        doc["fuel_price_per_liter"] = price
+    doc["fuel_price_per_unit"] = price
+    doc["fuel_price_per_liter"] = price
     try:
         daily_allowance = float(doc.get("daily_allowance") or 0)
     except (TypeError, ValueError) as error:
@@ -250,30 +255,36 @@ async def _prepare_trip(doc: dict) -> dict:
     fuelings = []
     for fillup in fillup_records:
         try:
-            fillup_price = float(fillup.get("price_per_liter") or price)
+            fillup_price = float(fillup.get("price_per_unit") or fillup.get("price_per_liter") or price)
             amount = float(fillup.get("amount") or 0)
         except (TypeError, ValueError) as error:
             raise HTTPException(400, "Informe valores válidos para cada abastecimento") from error
         if not math.isfinite(fillup_price) or fillup_price < 0 or not math.isfinite(amount) or amount < 0:
             raise HTTPException(400, "Os valores dos abastecimentos devem ser não negativos")
-        fillup_liters = round(amount / fillup_price, 2) if fillup_price > 0 else 0
+        quantity = round(amount / fillup_price, 2) if fillup_price > 0 else 0
         fuelings.append({
             "amount": amount,
+            "price_per_unit": fillup_price,
             "price_per_liter": fillup_price,
             "fuel_type": fillup.get("fuel_type") or doc.get("fuel_type"),
-            "liters": fillup_liters,
+            "quantity": quantity,
+            "unit": fuel_unit,
+            "liters": quantity if fuel_unit == "L" else 0,
         })
     doc["fuelings"] = fuelings
     if fuelings:
         doc["fuel_cost"] = round(sum(float(fillup["amount"]) for fillup in fuelings), 2)
-        doc["fuel_liters"] = round(sum(float(fillup["liters"]) for fillup in fuelings), 2)
-        purchased_liters = sum(float(fillup["liters"]) for fillup in fuelings)
-        if purchased_liters > 0:
-            doc["fuel_price_per_liter"] = round(doc["fuel_cost"] / purchased_liters, 2)
+        total_quantity = round(sum(float(fillup["quantity"]) for fillup in fuelings), 2)
+        doc["fuel_quantity"] = total_quantity
+        doc["fuel_liters"] = total_quantity if fuel_unit == "L" else 0
+        if total_quantity > 0:
+            doc["fuel_price_per_unit"] = round(doc["fuel_cost"] / total_quantity, 2)
+            doc["fuel_price_per_liter"] = doc["fuel_price_per_unit"]
     else:
-        doc["fuel_liters"] = estimated_liters
+        doc["fuel_quantity"] = estimated_quantity
+        doc["fuel_liters"] = estimated_quantity if fuel_unit == "L" else 0
         if price > 0:
-            doc["fuel_cost"] = round(estimated_liters * price, 2)
+            doc["fuel_cost"] = round(estimated_quantity * price, 2)
     toll_records = doc.get("tolls") or []
     if not isinstance(toll_records, list) or any(not isinstance(toll, dict) for toll in toll_records):
         raise HTTPException(400, "A lista de pedágios é inválida")
@@ -533,6 +544,7 @@ class TripDestination(BaseModel):
 class TripFueling(BaseModel):
     amount: float = Field(default=0, ge=0, allow_inf_nan=False)
     price_per_liter: float = Field(default=0, ge=0, allow_inf_nan=False)
+    price_per_unit: Optional[float] = Field(default=None, ge=0, allow_inf_nan=False)
     fuel_type: Optional[str] = None
 
 class TripToll(BaseModel):
@@ -567,6 +579,10 @@ class Expense(BaseModel):
     fuel_liters: float = 0
     estimated_fuel_liters: float = 0
     fuel_price_per_liter: float = 0
+    fuel_quantity: float = 0
+    estimated_fuel_quantity: float = 0
+    fuel_quantity_unit: str = "L"
+    fuel_price_per_unit: float = 0
     km: float = 0
     odometer_km: Optional[float] = None
     day_close_date: Optional[str] = None
@@ -1099,6 +1115,28 @@ def _geocode_address(address: str):
     except (KeyError, TypeError, ValueError) as error:
         raise HTTPException(502, "Coordenadas inválidas no serviço de localização") from error
 
+def _build_destination_geocoding_address(address: str, cep: str) -> str:
+    cep_pattern = "".join(f"{digit}-?" for digit in cep)
+    address_without_cep = re.sub(
+        rf"\bCEP\s*[:\-]?\s*{cep_pattern}\b",
+        "",
+        address,
+        flags=re.IGNORECASE,
+    )
+    address_without_cep = re.sub(r"\s*,\s*", ", ", address_without_cep).strip(" ,")
+    return ", ".join(part for part in (address_without_cep, f"CEP {cep}", "Brasil") if part)
+
+async def _geocode_for_distance(address: str, description: str):
+    try:
+        return await asyncio.to_thread(_geocode_address, address)
+    except HTTPException as error:
+        if error.status_code != 404:
+            raise
+        raise HTTPException(
+            404,
+            f"Não foi possível localizar {description}. Confira o endereço e o CEP.",
+        ) from error
+
 @api.get("/customers/cep/{cep}")
 async def lookup_customer_cep(cep: str, user: dict = Depends(get_current_user)):
     normalized_cep = "".join(character for character in cep if character.isdigit())
@@ -1129,10 +1167,10 @@ async def calculate_customer_distance(payload: CustomerDistanceInput, user: dict
     cep = "".join(character for character in payload.cep if character.isdigit())
     if len(cep) != 8:
         raise HTTPException(400, "Informe um CEP válido com 8 dígitos")
-    destination_address = f"{payload.address}, CEP {cep}, Brasil"
+    destination_address = _build_destination_geocoding_address(payload.address, cep)
     origin, destination = await asyncio.gather(
-        asyncio.to_thread(_geocode_address, f"{DEFAULT_DEPOT_ADDRESS}, Rio de Janeiro, RJ, Brasil"),
-        asyncio.to_thread(_geocode_address, destination_address),
+        _geocode_for_distance("Rua Salustiano Silva, 550, Rio de Janeiro, RJ, Brasil", "o endereço do depósito"),
+        _geocode_for_distance(destination_address, "o endereço informado"),
     )
     coordinates = f"{origin[1]},{origin[0]};{destination[1]},{destination[0]}"
     try:

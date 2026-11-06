@@ -773,7 +773,7 @@ export default function Settings() {
         <div className="grid sm:grid-cols-2 gap-3">
           {FUEL_TYPES.map((fuel) => (
             <label key={fuel} className="text-sm">
-              {fuel} (R$/litro)
+              {fuel} (R$/{fuel === "GNV" ? "m³" : "litro"})
               <input
                 className="lm-input mt-1"
                 type="number"

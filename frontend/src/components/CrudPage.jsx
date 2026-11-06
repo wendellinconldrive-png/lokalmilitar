@@ -88,7 +88,7 @@ export const CrudPage = ({ title, subtitle, endpoint, fields, columns, defaults 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-4">
               {fields.filter((f) => !(typeof f.hidden === "function" ? f.hidden(editing) : f.hidden)).map((f) => (
                 <label key={f.key} className={f.wide ? "md:col-span-2" : ""}>
-                  <div className="text-[11px] font-mono text-neutral-500 mb-1">{f.label}{f.required ? " *" : ""}</div>
+                  <div className="text-[11px] font-mono text-neutral-500 mb-1">{typeof f.label === "function" ? f.label(editing) : f.label}{f.required ? " *" : ""}</div>
                   {f.render ? (
                     f.render({ editing, setEditing })
                   ) : f.type === "multiselect" ? (
