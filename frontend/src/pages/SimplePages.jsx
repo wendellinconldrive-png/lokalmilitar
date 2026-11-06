@@ -442,6 +442,7 @@ export function Viagens() {
   const [customers, setCustomers] = useState([]);
   const [suppliers, setSuppliers] = useState([]);
   const [vehicles, setVehicles] = useState([]);
+  const [selectedReportVehicleIds, setSelectedReportVehicleIds] = useState([]);
   const [fuelPrices, setFuelPrices] = useState({});
   const [reportPeriodType, setReportPeriodType] = useState("week");
   const [reportPeriod, setReportPeriod] = useState(() => {
@@ -457,7 +458,9 @@ export function Viagens() {
       .then(([c, s, v, settings]) => {
         setCustomers(c.data);
         setSuppliers(s.data);
-        setVehicles(v.data.filter((vehicle) => vehicle.active !== false));
+        const activeVehicles = v.data.filter((vehicle) => vehicle.active !== false);
+        setVehicles(activeVehicles);
+        setSelectedReportVehicleIds(activeVehicles.map((vehicle) => vehicle.id));
         setFuelPrices(settings.data.fuel_prices || {});
       })
       .catch(() => toast.error("Não foi possível carregar clientes, fornecedores e veículos"));
@@ -493,6 +496,10 @@ export function Viagens() {
       toast.error("Selecione um período válido para o relatório");
       return;
     }
+    if (!selectedReportVehicleIds.length) {
+      toast.error("Selecione pelo menos um veículo para imprimir o relatório");
+      return;
+    }
     const printWindow = window.open("", "_blank");
     if (!printWindow) {
       toast.error("Permita pop-ups para imprimir o relatório");
@@ -502,6 +509,7 @@ export function Viagens() {
       const { data: expenses } = await api.get("/expenses");
       const trips = expenses
         .filter((expense) => expense.type === "VIAGEM")
+        .filter((trip) => selectedReportVehicleIds.includes(trip.vehicle_id))
         .filter((trip) => {
           const date = String(trip.date || "").slice(0, 10);
           return date >= range.start && date < range.end;
@@ -538,7 +546,38 @@ export function Viagens() {
   const travelReportFilters = (
     <section className="lokal-panel p-3 my-3 flex flex-wrap items-end gap-3" data-testid="travel-report-filters">
         <div className="font-head text-sm">Relatório de percursos</div>
-        <label className="text-xs font-mono">
+      <fieldset className="w-full">
+        <legend className="text-xs font-mono mb-2">Veículos incluídos</legend>
+        <div className="flex flex-wrap gap-x-4 gap-y-2">
+          {vehicles.map((vehicle) => (
+            <label key={vehicle.id} className="flex items-center gap-2 text-xs">
+              <input
+                type="checkbox"
+                checked={selectedReportVehicleIds.includes(vehicle.id)}
+                onChange={(event) => setSelectedReportVehicleIds((selected) => (
+                  event.target.checked
+                    ? [...selected, vehicle.id]
+                    : selected.filter((id) => id !== vehicle.id)
+                ))}
+                data-testid={`travel-report-vehicle-${vehicle.id}`}
+              />
+              {[vehicle.name, vehicle.plate].filter(Boolean).join(" · ")}
+            </label>
+          ))}
+          {!vehicles.length && <span className="text-xs text-neutral-500">Nenhum veículo ativo cadastrado.</span>}
+        </div>
+        {!!vehicles.length && (
+          <button
+            type="button"
+            className="text-xs underline mt-2"
+            onClick={() => setSelectedReportVehicleIds(vehicles.map((vehicle) => vehicle.id))}
+            data-testid="travel-report-select-all-vehicles"
+          >
+            Selecionar todos
+          </button>
+        )}
+      </fieldset>
+      <label className="text-xs font-mono">
           Período
           <select className="lm-input mt-1" value={reportPeriodType} onChange={(event) => {
             const type = event.target.value;
