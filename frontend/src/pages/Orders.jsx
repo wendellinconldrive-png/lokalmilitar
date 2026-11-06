@@ -838,7 +838,7 @@ export default function Orders({ mode }) {
                 ))}
                 data-testid="select-all-visible-orders"
               /></th>}
-              <th>#</th><th>Data</th><th>Tipo</th><th>Cliente</th><th>Vendedor</th><th>Itens</th><th>Total</th><th>Pgto</th><th>Status</th><th>Ações</th>
+              <th>#</th><th>Data</th><th>Tipo</th><th>Cliente</th><th>Vendedor</th><th>Itens</th><th>Total</th><th>Pgto</th><th>Status</th><th>WhatsApp</th><th>Ações</th>
             </tr>
           </thead>
           <tbody>
@@ -882,6 +882,21 @@ export default function Orders({ mode }) {
                     </span>
                   )}
                 </td>
+                <td className="whitespace-nowrap">
+                  {o.whatsapp_shared_at ? (
+                    <span
+                      className="inline-flex items-center gap-1 rounded bg-green-100 px-2 py-1 text-[10px] font-semibold text-green-800"
+                      title={`Compartilhado em ${formatDateShort(o.whatsapp_shared_at)} · ${o.whatsapp_share_count || 1} vez(es)`}
+                      data-testid={`whatsapp-shared-${o.number}`}
+                    >
+                      <MessageCircle size={12} />Já compartilhado
+                    </span>
+                  ) : (
+                    <span className="text-[10px] text-neutral-500" data-testid={`whatsapp-not-shared-${o.number}`}>
+                      Não compartilhado
+                    </span>
+                  )}
+                </td>
                 <td className="flex gap-1 py-2 flex-wrap">
                   <button className="p-1 hover:bg-neutral-200" onClick={()=>openEdit(o)} data-testid={`edit-order-${o.number}`}><Edit size={13}/></button>
                   {!["Entregue", "Retirado"].includes(o.status) && (
@@ -894,7 +909,7 @@ export default function Orders({ mode }) {
                 </td>
               </tr>
             ))}
-            {shownOrders.length===0 && (<tr><td colSpan={isTrocas ? 10 : 11} className="p-6 text-center text-neutral-500 text-xs">Nenhum pedido encontrado com esses filtros.</td></tr>)}
+            {shownOrders.length===0 && (<tr><td colSpan={isTrocas ? 10 : 12} className="p-6 text-center text-neutral-500 text-xs">Nenhum pedido encontrado com esses filtros.</td></tr>)}
           </tbody>
         </table>
       </div>
