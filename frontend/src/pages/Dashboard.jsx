@@ -419,7 +419,7 @@ export default function Dashboard() {
   const chartData = data.chart.map((d) => ({ label: d.date.slice(8, 10) + "/" + d.date.slice(5, 7), vendas: d.value }));
   const kpis = {
     orders_today: { icon: ClipboardList, label: "Pedidos hoje", value: data.orders_today, sub: formatBRL(data.orders_today_total), onClick: () => nav("/pedidos"), testid: "kpi-orders-today" },
-    pending: { icon: Clock, label: "Pedidos pendentes", value: data.pending, sub: "Orçamento / Aprovado / Separado", onClick: () => nav("/pedidos"), testid: "kpi-pending" },
+    pending: { icon: Clock, label: "Pedidos pendentes", value: data.pending, sub: "Orçamento / Anotado / Aprovado / Separado", onClick: () => nav("/pedidos"), testid: "kpi-pending" },
     customers: { icon: Users, label: "Clientes", value: data.customers, onClick: () => nav("/clientes"), testid: "kpi-customers" },
     commission_month: { icon: CircleDollarSign, label: "Comissão do mês", value: formatBRL(data.commission_month), onClick: () => nav("/comissoes"), testid: "kpi-commission" },
     low_stock: { icon: AlertTriangle, label: "Estoque baixo", value: data.low_stock.length, sub: "tamanhos no mínimo", onClick: () => nav("/estoque?low=1"), testid: "kpi-low-stock" },

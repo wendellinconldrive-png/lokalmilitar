@@ -16,13 +16,13 @@ import useSubmitLock from "@/hooks/useSubmitLock";
 import { focusNextField } from "@/lib/keyboardNavigation";
 
 const BLANK_ORDER = {
-  type: "VENDA", status: "Separado", customer_id: "", customer_name: "",
+  type: "VENDA", status: "Anotado", customer_id: "", customer_name: "",
   items: [], returned_items: [], exchanged_items: [],
   discount: 0, payment: "PIX", notes: "", avulsa: false, original_order_id: "",
 };
-const ORDER_STATUSES = ["Separado", "Entregue", "Retirado", "Cancelado"];
-const EDITABLE_ORDER_STATUSES = ["Separado", "Cancelado"];
-const BULK_ORDER_STATUSES = ["Separado", "Cancelado"];
+const ORDER_STATUSES = ["Anotado", "Separado", "Entregue", "Retirado", "Cancelado"];
+const EDITABLE_ORDER_STATUSES = ["Anotado", "Separado", "Cancelado"];
+const BULK_ORDER_STATUSES = ["Anotado", "Separado", "Cancelado"];
 const localDateValue = (date = new Date()) => {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -141,7 +141,7 @@ export default function Orders({ mode }) {
     if (
       orderFilterMode === "today_and_separated"
       && createdDate !== today
-      && order.status !== "Separado"
+      && !["Anotado", "Separado"].includes(order.status)
     ) return false;
     if (filterDateFrom && createdDate < filterDateFrom) return false;
     if (filterDateTo && createdDate > filterDateTo) return false;
@@ -413,15 +413,9 @@ export default function Orders({ mode }) {
   const changeSelectedOrdersStatus = async () => {
     if (!bulkStatus || selectedVisibleOrderIds.length === 0 || updatingBulkStatus || syncingSelectedStock) return;
     const selectedOrders = shownOrders.filter((order) => selectedVisibleOrderIds.includes(order.id));
-    const completedOrders = bulkStatus === "Cancelado"
-      ? []
-      : selectedOrders.filter(isCompletedOrder);
-    const ordersToUpdate = selectedOrders.filter((order) => (
-      order.status !== bulkStatus
-      && (bulkStatus === "Cancelado" || !isCompletedOrder(order))
-    ));
+    const ordersToUpdate = selectedOrders.filter((order) => order.status !== bulkStatus);
     if (ordersToUpdate.length === 0) {
-      toast.error("Selecione pedidos ainda não concluídos e um novo status");
+      toast.error("Selecione pedidos com status diferente do novo status");
       return;
     }
     setUpdatingBulkStatus(true);
@@ -439,16 +433,13 @@ export default function Orders({ mode }) {
     setSelectedOrderIds([]);
     setUpdatingBulkStatus(false);
     if (updatedCount > 0) toast.success(`${updatedCount} pedido(s) atualizado(s) para ${bulkStatus}`);
-    if (completedOrders.length > 0) {
-      toast.info(`${completedOrders.length} pedido(s) entregue(s)/retirado(s) ignorado(s); conclua ou confira individualmente.`);
-    }
     if (failures.length > 0) toast.error(`Falha ao atualizar: ${failures.join(", ")}`);
   };
   const syncSelectedOrdersStock = async () => {
     if (selectedVisibleOrderIds.length === 0 || updatingBulkStatus || syncingSelectedStock) return;
     const ordersToSync = shownOrders.filter((order) => selectedVisibleOrderIds.includes(order.id));
     if (!window.confirm(
-      `Sincronizar o estoque de ${ordersToSync.length} pedido(s) pelo status atual? Separados não terão baixa; Entregues/Retirados terão baixas e devoluções conferidas; Cancelados terão apenas as saídas estornadas.`,
+      `Sincronizar o estoque de ${ordersToSync.length} pedido(s) pelo status atual? Separados/Entregues/Retirados terão baixas e devoluções conferidas; Anotados não alteram o estoque; Cancelados terão as saídas estornadas.`,
     )) return;
     setSyncingSelectedStock(true);
     const results = [];
@@ -677,7 +668,7 @@ export default function Orders({ mode }) {
   return (
     <div data-testid="orders-page">
       <header className="lm-page-head flex items-end justify-between flex-wrap gap-2">
-        <div><h1>{isTrocas ? "Trocas e Devoluções" : "Pedidos & PDV"}</h1><p>{isTrocas ? "Trocas vinculadas a pedidos ou avulsas" : "O estoque é lançado somente quando o pedido é entregue ou retirado"}</p></div>
+        <div><h1>{isTrocas ? "Trocas e Devoluções" : "Pedidos & PDV"}</h1><p>{isTrocas ? "Trocas vinculadas a pedidos ou avulsas" : "Anotados não alteram o estoque; Separados comprometem as quantidades em estoque"}</p></div>
         <div className="flex gap-2">
           <button className="lm-btn lm-btn-dark" onClick={()=>setReportOpen(true)} data-testid="btn-report">
             <FileText size={14}/>Relatórios de Saídas
@@ -740,7 +731,7 @@ export default function Orders({ mode }) {
         <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-6">
           <label className="text-xs">Visualização
             <select className="input mt-1" value={orderFilterMode} onChange={(event) => setOrderFilterMode(event.target.value)} data-testid="order-filter-mode">
-              <option value="today_and_separated">Hoje + separados de outros dias</option>
+              <option value="today_and_separated">Hoje + anotados/separados de outros dias</option>
               <option value="all">Todos os pedidos</option>
             </select>
           </label>
@@ -765,7 +756,7 @@ export default function Orders({ mode }) {
         </div>
         <div className="text-xs text-neutral-600" aria-live="polite">
           {orderFilterMode === "today_and_separated" && !filterDateFrom && !filterDateTo
-            ? "Exibindo pedidos de hoje e pedidos separados, inclusive de dias anteriores."
+            ? "Exibindo pedidos de hoje e pedidos anotados ou separados, inclusive de dias anteriores."
             : `Exibindo ${shownOrders.length} pedido(s) com os filtros selecionados.`}
         </div>
           </section>
@@ -870,8 +861,8 @@ export default function Orders({ mode }) {
                       aria-label={`Status do pedido #${o.number}`}
                       data-testid={`order-status-${o.number}`}
                     >
-                      {!ORDER_STATUSES.includes(o.status) && <option disabled>{o.status}</option>}
-                      {ORDER_STATUSES.map((status) => <option key={status}>{status}</option>)}
+                      {!EDITABLE_ORDER_STATUSES.includes(o.status) && <option disabled>{o.status}</option>}
+                      {EDITABLE_ORDER_STATUSES.map((status) => <option key={status}>{status}</option>)}
                     </select>
                   ) : (
                     <span className="text-[10px] px-2 py-0.5 bg-neutral-200">{o.status}</span>
@@ -996,7 +987,7 @@ export default function Orders({ mode }) {
               </div>
               {!["Entregue", "Retirado"].includes(editing.status) && (
                 <p className="text-xs text-neutral-600">
-                  Separado não altera o estoque. Entregue/Retirado lança a saída dos itens e a entrada das devoluções; Cancelado devolve ao estoque somente saídas que já ocorreram.
+                  Anotado não altera o estoque. Separado compromete os itens; Entregue/Retirado mantém a baixa e registra devoluções. Cancelado estorna as movimentações de estoque.
                 </p>
               )}
 

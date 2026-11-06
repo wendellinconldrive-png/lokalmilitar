@@ -1,4 +1,4 @@
-const COMPLETED_ORDER_STATUSES = new Set(["Entregue", "Retirado"]);
+const STOCK_APPLIED_ORDER_STATUSES = new Set(["Separado", "Entregue", "Retirado"]);
 const STOCK_ORDER_TYPES = new Set(["VENDA", "TROCA", "DEVOLUCAO"]);
 const ORDER_DISASSEMBLY_KINDS = new Set([
   "DESMONTAGEM_SAIDA",
@@ -16,7 +16,7 @@ export const getStockHistoryRows = (movements, orders) => {
   const returnedItems = new Set();
 
   orders.filter((order) => (
-    COMPLETED_ORDER_STATUSES.has(order.status) && STOCK_ORDER_TYPES.has(order.type || "VENDA")
+    STOCK_APPLIED_ORDER_STATUSES.has(order.status) && STOCK_ORDER_TYPES.has(order.type || "VENDA")
   )).forEach((order) => {
     (order.items || []).forEach((item) => {
       if (!item.product_id) return;
@@ -104,7 +104,7 @@ export const getStockHistoryRows = (movements, orders) => {
       expectedQty: expected.qty,
       groupedCount: 0,
       reconciliation: "missing",
-      reason: "Venda concluída sem saída no histórico",
+      reason: "Pedido separado/concluído sem saída no histórico",
     });
   });
 

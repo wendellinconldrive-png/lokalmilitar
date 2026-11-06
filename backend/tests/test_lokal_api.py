@@ -22,6 +22,14 @@ CREATED = {"products": [], "orders": [], "users": [], "customers": [], "supplier
 def admin():
     s = requests.Session()
     yield s
+    order_ids = set(CREATED["orders"])
+    if order_ids:
+        orders = s.get(f"{BASE_URL}/api/orders").json()
+        CREATED["customers"].extend(
+            order.get("customer_id")
+            for order in orders
+            if order.get("id") in order_ids and order.get("customer_id")
+        )
     for coll, ids in CREATED.items():
         for i in ids:
             path = "auth/users" if coll == "users" else coll
@@ -256,7 +264,7 @@ class TestOrders:
         assert response.status_code == 400
         assert "produto" in response.json()["detail"].lower()
 
-    def test_novo_pedido_inicia_separado_sem_alterar_estoque(self, admin):
+    def test_novo_pedido_inicia_anotado_e_baixa_estoque_ao_separar(self, admin):
         product = _prod(admin, "TEST_Status_Separado", [{"size": "U", "stock": 4}])
         response = admin.post(
             f"{BASE_URL}/api/orders",
@@ -274,13 +282,27 @@ class TestOrders:
         assert response.status_code == 200, response.text
         order = response.json()
         CREATED["orders"].append(order["id"])
-        assert order["status"] == "Separado"
+        assert order["status"] == "Anotado"
         assert _stock(admin, product["id"], "U") == 4
         assert not [
             movement
             for movement in admin.get(f"{BASE_URL}/api/stock_movements").json()
             if movement.get("order_id") == order["id"]
         ]
+        customer = next(
+            item for item in admin.get(f"{BASE_URL}/api/customers").json()
+            if item["id"] == order["customer_id"]
+        )
+        CREATED["customers"].append(customer["id"])
+        assert customer["name"] == "TEST_Status_Separado"
+
+        separated = admin.put(
+            f"{BASE_URL}/api/orders/{order['id']}",
+            json={"status": "Separado"},
+        )
+        assert separated.status_code == 200, separated.text
+        assert _stock(admin, product["id"], "U") == 2
+        assert separated.json()["stock_applied"] is True
 
     def test_concurrent_order_fulfillments_preserve_stock_and_movements(self, admin):
         product = _prod(admin, "TEST_Baixa_Concorrente", [{"size": "U", "stock": 20}])
@@ -409,7 +431,7 @@ class TestOrders:
             f"{BASE_URL}/api/orders",
             json={
                 "customer_name": "TEST_Baixa_Pendente_Antiga",
-                "status": "Separado",
+                "status": "Anotado",
                 "items": [{
                     "product_id": product["id"],
                     "name": product["name"],
@@ -448,7 +470,7 @@ class TestOrders:
             f"{BASE_URL}/api/orders",
             json={
                 "customer_name": "TEST_Baixa_Parcial",
-                "status": "Separado",
+                "status": "Anotado",
                 "items": [{
                     "product_id": product["id"],
                     "name": product["name"],
@@ -717,7 +739,7 @@ class TestOrders:
             json={"delivery_type": "RETIRADA"},
         )
         assert without_signature.status_code == 400
-        assert _stock(admin, product["id"], "U") == 2
+        assert _stock(admin, product["id"], "U") == 1
 
         with_signature = vendor.post(
             f"{BASE_URL}/api/orders/{order['id']}/fulfill",
@@ -743,6 +765,111 @@ class TestOrders:
         trips = [expense for expense in admin.get(f"{BASE_URL}/api/expenses").json() if expense.get("order_id") == o["id"]]
         assert trips == []
 
+    def test_reabrir_pedido_remove_viagem_e_atualiza_fechamento(self, admin):
+        product = _prod(admin, "TEST_Rota_ao_Reabrir", [{"size": "U", "stock": 3}])
+        created = admin.post(
+            f"{BASE_URL}/api/orders",
+            json={
+                "customer_name": "TEST_Cliente_Rota_Livre",
+                "items": [{
+                    "product_id": product["id"],
+                    "name": product["name"],
+                    "size": "U",
+                    "qty": 1,
+                    "unit_price": 10,
+                }],
+            },
+        )
+        assert created.status_code == 200, created.text
+        order = created.json()
+        CREATED["orders"].append(order["id"])
+        customer = next(
+            item for item in admin.get(f"{BASE_URL}/api/customers").json()
+            if item["id"] == order["customer_id"]
+        )
+        CREATED["customers"].append(customer["id"])
+        assert customer["name"] == "TEST_Cliente_Rota_Livre"
+
+        separated = admin.put(
+            f"{BASE_URL}/api/orders/{order['id']}",
+            json={"status": "Separado"},
+        )
+        assert separated.status_code == 200, separated.text
+        assert _stock(admin, product["id"], "U") == 2
+        delivered = admin.post(
+            f"{BASE_URL}/api/orders/{order['id']}/fulfill",
+            json={"delivery_type": "ENTREGA"},
+        )
+        assert delivered.status_code == 200, delivered.text
+        trips = [
+            expense for expense in admin.get(f"{BASE_URL}/api/expenses").json()
+            if expense.get("order_id") == order["id"]
+        ]
+        assert len(trips) == 1
+
+        report = admin.post(f"{BASE_URL}/api/dashboard/close-day")
+        assert report.status_code == 200, report.text
+        assert any(
+            expense.get("order_id") == order["id"]
+            for expense in report.json()["expenses"]
+        )
+
+        reopened = admin.put(
+            f"{BASE_URL}/api/orders/{order['id']}",
+            json={"status": "Separado"},
+        )
+        assert reopened.status_code == 200, reopened.text
+        assert _stock(admin, product["id"], "U") == 2
+        assert not [
+            expense for expense in admin.get(f"{BASE_URL}/api/expenses").json()
+            if expense.get("order_id") == order["id"]
+        ]
+        refreshed_report = admin.get(
+            f"{BASE_URL}/api/dashboard/closures/{report.json()['date']}"
+        )
+        assert refreshed_report.status_code == 200, refreshed_report.text
+        assert not [
+            expense for expense in refreshed_report.json()["expenses"]
+            if expense.get("order_id") == order["id"]
+        ]
+
+        delivered_again = admin.post(
+            f"{BASE_URL}/api/orders/{order['id']}/fulfill",
+            json={"delivery_type": "ENTREGA"},
+        )
+        assert delivered_again.status_code == 200, delivered_again.text
+        assert len([
+            expense for expense in admin.get(f"{BASE_URL}/api/expenses").json()
+            if expense.get("order_id") == order["id"]
+        ]) == 1
+        redelivery_report = admin.get(
+            f"{BASE_URL}/api/dashboard/closures/{report.json()['date']}"
+        )
+        assert redelivery_report.status_code == 200, redelivery_report.text
+        assert any(
+            expense.get("order_id") == order["id"]
+            for expense in redelivery_report.json()["expenses"]
+        )
+
+        cancelled = admin.put(
+            f"{BASE_URL}/api/orders/{order['id']}",
+            json={"status": "Cancelado"},
+        )
+        assert cancelled.status_code == 200, cancelled.text
+        assert _stock(admin, product["id"], "U") == 3
+        assert not [
+            expense for expense in admin.get(f"{BASE_URL}/api/expenses").json()
+            if expense.get("order_id") == order["id"]
+        ]
+        final_report = admin.get(
+            f"{BASE_URL}/api/dashboard/closures/{report.json()['date']}"
+        )
+        assert final_report.status_code == 200, final_report.text
+        assert not [
+            expense for expense in final_report.json()["expenses"]
+            if expense.get("order_id") == order["id"]
+        ]
+
     def test_admin_altera_status_e_sincroniza_estoque(self, admin):
         p = _prod(admin, "TEST_Coturno", [{"size": "40", "stock": 5}])
         o = admin.post(f"{BASE_URL}/api/orders", json={"customer_name": "TEST_Cli", "status": "Aprovado",
@@ -758,10 +885,13 @@ class TestOrders:
 
         reopened = admin.put(f"{BASE_URL}/api/orders/{o['id']}", json={**completed.json(), "status": "Separado"})
         assert reopened.status_code == 200, reopened.text
-        assert _stock(admin, p["id"], "40") == 5
-        assert not [m for m in admin.get(f"{BASE_URL}/api/stock_movements").json() if m.get("order_id") == o["id"]]
+        assert _stock(admin, p["id"], "40") == 4
+        movements = [m for m in admin.get(f"{BASE_URL}/api/stock_movements").json() if m.get("order_id") == o["id"]]
+        assert sorted((movement["kind"], movement["qty"]) for movement in movements) == [
+            ("ENTRADA", 1), ("SAIDA", 2),
+        ]
 
-    def test_sync_separated_order_reverses_stale_stock_movement(self, admin):
+    def test_sync_anotado_order_reverses_stale_stock_movement(self, admin):
         from pymongo import MongoClient
 
         product = _prod(admin, "TEST_Sincronizar_Separado", [{"size": "U", "stock": 5}])
@@ -769,7 +899,7 @@ class TestOrders:
             f"{BASE_URL}/api/orders",
             json={
                 "customer_name": "TEST_Sincronizar_Separado",
-                "status": "Separado",
+                "status": "Anotado",
                 "items": [{
                     "product_id": product["id"],
                     "name": product["name"],
@@ -801,7 +931,7 @@ class TestOrders:
 
         synchronized = admin.post(f"{BASE_URL}/api/orders/{order['id']}/sync-stock-status")
         assert synchronized.status_code == 200, synchronized.text
-        assert synchronized.json()["status"] == "Separado"
+        assert synchronized.json()["status"] == "Anotado"
         assert synchronized.json()["stock_applied"] is False
         assert _stock(admin, product["id"], "U") == 5
         assert not [
@@ -822,7 +952,7 @@ class TestOrders:
             f"{BASE_URL}/api/orders",
             json={
                 "customer_name": "TEST_Sincronizar_Tamanho_Legado",
-                "status": "Separado",
+                "status": "Anotado",
                 "items": [{
                     "product_id": product["id"],
                     "name": product["name"],
@@ -876,7 +1006,7 @@ class TestOrders:
             f"{BASE_URL}/api/orders",
             json={
                 "customer_name": "TEST_Corrigir_Tamanho_Legado_Entregue",
-                "status": "Separado",
+                "status": "Anotado",
                 "items": [{
                     "product_id": product["id"],
                     "name": product["name"],
@@ -949,7 +1079,7 @@ class TestOrders:
         assert created.status_code == 200, created.text
         order = created.json()
         CREATED["orders"].append(order["id"])
-        assert _stock(admin, product["id"], "U") == 5
+        assert _stock(admin, product["id"], "U") == 4
 
         completed = admin.post(
             f"{BASE_URL}/api/orders/{order['id']}/fulfill",
@@ -1020,9 +1150,9 @@ class TestOrders:
         created = admin.post(f"{BASE_URL}/api/orders", json={"customer_name": "TEST_Cli", "status": "Separado",
                                                         "items": [{"product_id": calca["id"], "name": calca["name"], "size": "M", "qty": 1, "unit_price": 100}]}).json()
         CREATED["orders"].append(created["id"])
-        assert _stock(admin, farda["id"], "M") == 1
+        assert _stock(admin, farda["id"], "M") == 0
         assert _stock(admin, calca["id"], "M") == 0
-        assert _stock(admin, gandola["id"], "M") == 0
+        assert _stock(admin, gandola["id"], "M") == 1
 
         completed = admin.put(
             f"{BASE_URL}/api/orders/{created['id']}",

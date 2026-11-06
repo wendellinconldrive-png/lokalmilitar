@@ -490,7 +490,7 @@ class Order(BaseModel):
     id: str = Field(default_factory=new_id)
     number: int = 0
     type: str = "VENDA"  # VENDA | TROCA | DEVOLUCAO | ORCAMENTO
-    status: str = "Separado"  # Separado | Entregue | Retirado | Cancelado
+    status: str = "Anotado"  # Anotado | Separado | Entregue | Retirado | Cancelado
     customer_id: Optional[str] = None
     customer_name: Optional[str] = None
     vendor_id: Optional[str] = None
@@ -659,7 +659,7 @@ class Settings(BaseModel):
     print_header_html: str = ""
     print_footer_text: str = "Obrigado pela preferência! - Lokal Militar"
 
-ACTIVE_STATUSES = ("Aprovado", "Separado", "Entregue", "Retirado")
+ACTIVE_STATUSES = ("Anotado", "Aprovado", "Separado", "Entregue", "Retirado")
 
 class Vendor(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -1824,7 +1824,7 @@ async def _order_stock_movements_match(order: dict) -> bool:
 
 async def _reset_incomplete_stock_application(order: dict) -> bool:
     if (
-        not _order_is_fulfilled(order)
+        not _order_should_apply_stock(order)
         or order.get("stock_applied") is not True
         or await _order_stock_movements_match(order)
     ):
@@ -1841,7 +1841,7 @@ async def _sync_order_stock_to_status(order: dict):
         if await _has_order_stock_movements(order["id"]) or order.get("stock_applied"):
             await _cancel_order_stock(order["id"])
         return
-    if not _order_is_fulfilled(order) or not supported_order_type:
+    if not _order_should_apply_stock(order) or not supported_order_type:
         if await _has_order_stock_movements(order["id"]):
             await _reverse_order_stock(order["id"])
         elif order.get("stock_applied"):
@@ -1896,6 +1896,44 @@ async def _release_order_stock_claim(order_id: str):
 
 def _order_is_fulfilled(order: dict) -> bool:
     return order.get("status") in ("Entregue", "Retirado")
+
+def _order_should_apply_stock(order: dict) -> bool:
+    return order.get("status") in ("Separado", "Entregue", "Retirado")
+
+async def _refresh_day_closure(day: Optional[str], user: dict):
+    if not day:
+        return
+    closure = await db.day_closures.find_one({"date": day}, {"_id": 0})
+    if not closure:
+        return
+    report = await _build_day_closure(day, user, closure)
+    await db.day_closures.update_one(
+        {"date": day},
+        {"$set": {
+            "summary": report["summary"],
+            "orders": report["orders"],
+            "stock_movements": report["stock_movements"],
+            "expenses": report["expenses"],
+        }},
+    )
+
+async def _remove_order_delivery_trips(order_id: str, user: dict):
+    trips = await db.expenses.find(
+        {"order_id": order_id, "type": "VIAGEM"}
+    ).to_list(100)
+    trip_days = {
+        day
+        for day in (_business_date(trip.get("date")) for trip in trips)
+        if day
+    }
+    for trip in trips:
+        await _change_vehicle_km(
+            trip.get("vehicle_id"), -float(trip.get("km") or 0)
+        )
+    if trips:
+        await db.expenses.delete_many({"order_id": order_id, "type": "VIAGEM"})
+    for day in trip_days:
+        await _refresh_day_closure(day, user)
 
 def _stock_relevant_order_fields(order: dict) -> dict:
     return {
@@ -1965,10 +2003,23 @@ async def create_order(payload: dict, user: dict = Depends(get_current_user)):
         doc["separated_at"] = now_iso()
     if _order_is_fulfilled(doc):
         raise HTTPException(400, "Conclua o pedido pela ação Entregar/Retirar")
+    if not doc.get("customer_id"):
+        customer_name = str(doc.get("customer_name") or "").strip()
+        if customer_name:
+            customer = await db.customers.find_one(
+                {"name": {"$regex": f"^{re.escape(customer_name)}$", "$options": "i"}},
+                {"_id": 0},
+            )
+            if not customer:
+                customer = Customer(name=customer_name).model_dump()
+                await db.customers.insert_one(customer.copy())
+            doc["customer_id"] = customer["id"]
+            doc["customer_name"] = customer["name"]
     await db.orders.insert_one(doc)
     if doc["status"] in ACTIVE_STATUSES and doc["type"] in ("VENDA",):
         await _record_commission(doc)
-    return strip_mongo(doc)
+    await _sync_order_stock_to_status(doc)
+    return await db.orders.find_one({"id": doc["id"]}, {"_id": 0})
 
 async def _update_order(oid: str, payload: dict, user: dict, allow_fulfillment: bool = False):
     old = await db.orders.find_one({"id": oid})
@@ -2031,6 +2082,8 @@ async def _update_order(oid: str, payload: dict, user: dict, allow_fulfillment: 
         await db.orders.update_one({"id": oid}, {"$set": payload})
     doc = await db.orders.find_one({"id": oid}, {"_id": 0})
     await _sync_order_stock_to_status(doc)
+    if _order_is_fulfilled(old) and not _order_is_fulfilled(doc):
+        await _remove_order_delivery_trips(oid, user)
     doc = await db.orders.find_one({"id": oid}, {"_id": 0})
     if doc.get("type") == "VENDA":
         await _record_commission(doc)
@@ -2123,6 +2176,7 @@ async def fulfill_order(oid: str, payload: dict, user: dict = Depends(get_curren
         await _prepare_trip(trip)
         await db.expenses.insert_one(trip)
         await _change_vehicle_km(trip.get("vehicle_id"), float(trip.get("km") or 0))
+        await _refresh_day_closure(_business_date(trip.get("date")), user)
     return completed
 
 @api.delete("/orders/{oid}")
@@ -2132,12 +2186,8 @@ async def delete_order(oid: str, user: dict = Depends(get_current_user)):
         raise HTTPException(404, "Pedido não encontrado")
     if await _has_order_stock_movements(oid):
         await _reverse_order_stock(oid)
-    delivery_trips = await db.expenses.find({"order_id": oid, "type": "VIAGEM"}).to_list(100)
-    for trip in delivery_trips:
-        await _change_vehicle_km(trip.get("vehicle_id"), -float(trip.get("km") or 0))
-    if delivery_trips:
-        await db.expenses.delete_many({"order_id": oid, "type": "VIAGEM"})
     await db.orders.delete_one({"id": oid})
+    await _remove_order_delivery_trips(oid, user)
     await db.commissions.delete_many({"order_id": oid})
     if order.get("type") in ("TROCA", "DEVOLUCAO") and order.get("original_order_id"):
         original_order = await db.orders.find_one({"id": order["original_order_id"]}, {"_id": 0})
@@ -3062,7 +3112,7 @@ async def dashboard(user: dict = Depends(get_current_user), days: int = Query(7,
         db.orders.find({
             "$or": [
                 {"created_at": {"$gte": chart_start}},
-                {"status": {"$in": ["Orçamento", "Aprovado", "Separado"]}},
+                {"status": {"$in": ["Orçamento", "Anotado", "Aprovado", "Separado"]}},
             ],
         }, {
             "_id": 0, "created_at": 1, "status": 1, "total": 1, "type": 1,
@@ -3098,7 +3148,7 @@ async def dashboard(user: dict = Depends(get_current_user), days: int = Query(7,
                 low_stock.append({"id": p["id"], "name": p["name"], "sku": p.get("sku"),
                                   "size": s["size"], "stock": s["stock"], "stock_min": s["stock_min"]})
     orders_today = [o for o in orders if (o.get("created_at", "") or "").startswith(today)]
-    pending = [o for o in orders if o.get("status") in ("Orçamento", "Aprovado", "Separado")]
+    pending = [o for o in orders if o.get("status") in ("Orçamento", "Anotado", "Aprovado", "Separado")]
     # commission month
     com_month = sum(c.get("amount", 0) for c in coms if (c.get("created_at", "") or "").startswith(cur_month))
     # expenses month
