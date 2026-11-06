@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { CrudPage } from "@/components/CrudPage";
 import { api, formatBRL, formatDateShort } from "@/lib/api";
 import { toast } from "sonner";
+import { Printer } from "lucide-react";
 import useSubmitLock from "@/hooks/useSubmitLock";
 import CustomerAddressFields from "@/components/CustomerAddressFields";
 import { formatCustomerPhone } from "@/lib/customerFields";
@@ -167,6 +168,93 @@ const formatTripFuelQuantities = (trip) => {
     return quantities.map(([fuel, value]) => `${fuel}: ${value.quantity} ${value.unit}`).join(" · ");
   }
   return `${Number(trip.fuel_quantity ?? trip.fuel_liters ?? 0)} ${trip.fuel_quantity_unit || (trip.fuel_type === "GNV" ? "m³" : "L")}`;
+};
+const printTripReport = (trip) => {
+  const printWindow = window.open("", "_blank");
+  if (!printWindow) {
+    toast.error("Permita pop-ups para imprimir o percurso");
+    return;
+  }
+  const destinations = trip.destinations?.length
+    ? trip.destinations
+    : trip.destination_id
+      ? [{ destination_type: trip.destination_type, destination_id: trip.destination_id }]
+      : [];
+  const date = String(trip.date || "").slice(0, 10).split("-").reverse().join("/") || "—";
+  const totalCost = Number(trip.fuel_cost || 0) + Number(trip.toll_cost || 0)
+    + Number(trip.daily_allowance || 0) + Number(trip.amount || 0);
+  const detailRows = [
+    ["Código do percurso", trip.id],
+    ["Data", date],
+    ["Objetivo / destino", trip.description],
+    ["Rota", trip.route],
+    ["Veículo", trip.vehicle_name],
+    ["Código do veículo", trip.vehicle_id],
+    ["Quilometragem percorrida", `${Number(trip.km || 0).toLocaleString("pt-BR")} km`],
+    ["KM no painel", trip.odometer_km == null ? "—" : `${Number(trip.odometer_km).toLocaleString("pt-BR")} km`],
+    ["Data do fechamento diário", trip.day_close_date],
+    ["Combustível principal", trip.fuel_type],
+    ["Consumo médio", trip.avg_consumption == null ? "—" : `${trip.avg_consumption} km/${trip.fuel_type === "GNV" ? "m³" : "L"}`],
+    ["Preço por unidade", formatBRL(trip.fuel_price_per_unit ?? trip.fuel_price_per_liter)],
+    ["Quantidade abastecida", formatTripFuelQuantities(trip)],
+    ["Consumo estimado", `${Number(trip.estimated_fuel_quantity ?? trip.estimated_fuel_liters ?? 0)} ${trip.fuel_quantity_unit || (trip.fuel_type === "GNV" ? "m³" : "L")}`],
+    ["Gasto com combustível", formatBRL(trip.fuel_cost)],
+    ["Total de pedágios", formatBRL(trip.toll_cost)],
+    ["Diária", formatBRL(trip.daily_allowance)],
+    ["Outros gastos", formatBRL(trip.amount)],
+    ["Total do percurso", formatBRL(totalCost)],
+    ...(trip.created_at ? [["Registro criado em", trip.created_at]] : []),
+  ];
+  const renderTable = (headers, rows, emptyMessage) => `
+    <table><thead><tr>${headers.map((header) => `<th>${escapeReportHtml(header)}</th>`).join("")}</tr></thead>
+    <tbody>${rows.length
+      ? rows.map((row) => `<tr>${row.map((value) => `<td>${escapeReportHtml(value ?? "—")}</td>`).join("")}</tr>`).join("")
+      : `<tr><td colspan="${headers.length}" class="empty">${escapeReportHtml(emptyMessage)}</td></tr>`}</tbody></table>`;
+  const destinationRows = destinations.map((destination, index) => [
+    index + 1,
+    destination.destination_type === "fornecedor" ? "Fornecedor" : "Cliente",
+    destination.name,
+    destination.address,
+    destination.destination_id,
+    destination.distance_km == null ? "—" : `${Number(destination.distance_km).toLocaleString("pt-BR")} km`,
+  ]);
+  const fuelingRows = (trip.fuelings || []).map((fueling) => [
+    fueling.fuel_type || trip.fuel_type,
+    formatBRL(fueling.amount),
+    formatBRL(fueling.price_per_unit ?? fueling.price_per_liter),
+    fueling.quantity == null ? "—" : `${fueling.quantity} ${fueling.unit || (fueling.fuel_type === "GNV" ? "m³" : "L")}`,
+    fueling.liters == null ? "—" : `${fueling.liters} L`,
+  ]);
+  const tollRows = (trip.tolls || []).map((toll) => [toll.description, formatBRL(toll.amount)]);
+  const quantityRows = Object.entries(trip.fuel_quantities || {}).map(([fuel, value]) => [
+    fuel, value.quantity, value.unit,
+  ]);
+  printWindow.document.write(`<!doctype html><html><head><meta charset="utf-8">
+    <title>Relatório do percurso · ${escapeReportHtml(trip.description || trip.id)}</title>
+    <style>
+      body{font:12px Arial,sans-serif;padding:24px;color:#222}h1{color:#354017;font-size:20px;margin-bottom:4px}
+      h2{color:#354017;font-size:15px;margin:22px 0 8px}p{margin:4px 0 14px}
+      table{width:100%;border-collapse:collapse;margin:8px 0 16px;page-break-inside:auto}
+      tr{page-break-inside:avoid}th,td{border:1px solid #aaa;padding:7px;text-align:left;vertical-align:top}
+      th{background:#eee}.empty{text-align:center;color:#666}.summary{font-weight:bold;background:#f2f2ed}
+      @media print{body{padding:0}}
+    </style></head><body>
+    <h1>LOKAL MILITAR — Relatório individual do percurso</h1>
+    <p>Emitido em ${escapeReportHtml(new Date().toLocaleString("pt-BR"))}</p>
+    <h2>Dados do percurso</h2>
+    ${renderTable(["Informação", "Dado registrado"], detailRows, "Nenhum dado registrado.")}
+    <h2>Destinos</h2>
+    ${renderTable(["Ordem", "Tipo", "Nome", "Endereço", "Código do destino", "Distância cadastrada"], destinationRows, "Nenhum destino informado.")}
+    <h2>Abastecimentos</h2>
+    ${renderTable(["Combustível", "Valor gasto", "Preço por unidade", "Quantidade", "Litros"], fuelingRows, "Nenhum abastecimento detalhado.")}
+    <h2>Quantidades por combustível</h2>
+    ${renderTable(["Combustível", "Quantidade", "Unidade"], quantityRows, "Nenhuma quantidade discriminada por combustível.")}
+    <h2>Pedágios</h2>
+    ${renderTable(["Praça / observação", "Valor"], tollRows, "Nenhum pedágio informado.")}
+    <table><tbody><tr class="summary"><th>Total de despesas do percurso</th><td>${escapeReportHtml(formatBRL(totalCost))}</td></tr></tbody></table>
+    </body></html>`);
+  printWindow.document.close();
+  printWindow.setTimeout(() => printWindow.print(), 300);
 };
 
 function TripDestinationsField({ editing, setEditing, customers, suppliers }) {
@@ -656,6 +744,18 @@ export function Viagens() {
         { label: "DIÁRIA", render: (r) => formatBRL(r.daily_allowance) },
         { label: "TOTAL", render: (r) => formatBRL(Number(r.fuel_cost || 0) + Number(r.toll_cost || 0) + Number(r.daily_allowance || 0) + Number(r.amount || 0)) },
       ]}
+      rowActions={(trip) => (
+        <button
+          type="button"
+          className="p-1 hover:bg-neutral-200"
+          onClick={() => printTripReport(trip)}
+          aria-label={`Imprimir relatório do percurso ${trip.description || trip.id}`}
+          title="Imprimir relatório deste percurso"
+          data-testid={`print-trip-report-${trip.id}`}
+        >
+          <Printer size={13} />
+        </button>
+      )}
       footer={(rows) => sumBox("Total em viagens", total(rows, (r) => Number(r.fuel_cost || 0) + Number(r.toll_cost || 0) + Number(r.daily_allowance || 0) + Number(r.amount || 0)))} />
   );
 }
