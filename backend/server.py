@@ -390,6 +390,8 @@ class Supplier(BaseModel):
     cnpj: Optional[str] = None
     phone: Optional[str] = None
     email: Optional[str] = None
+    cep: Optional[str] = None
+    address_number: Optional[str] = None
     address: Optional[str] = None
     distance_km: float = 0
     notes: Optional[str] = None

@@ -56,13 +56,15 @@ export function Categories() {
 export function Suppliers() {
   return (
     <CrudPage title="Fornecedores" endpoint="suppliers" testid="suppliers"
+      defaults={{ cep: "", address_number: "", address: "", distance_km: 0 }}
       fields={[
         { key: "name", label: "Nome", required: true }, { key: "cnpj", label: "CNPJ" },
         { key: "phone", label: "Telefone" }, { key: "email", label: "E-mail" },
+        { key: "address", label: "CEP e endereço", wide: true, render: (props) => <CustomerAddressFields {...props} /> },
         { key: "distance_km", label: "KM do depósito até o endereço", type: "number" },
         { key: "notes", label: "Observações", type: "textarea", wide: true },
       ]}
-      columns={[{ key: "name", label: "NOME" }, { key: "cnpj", label: "CNPJ" }, { key: "phone", label: "TELEFONE" }, { key: "email", label: "E-MAIL" }, { key: "distance_km", label: "KM DO DEPÓSITO" }]} />
+      columns={[{ key: "name", label: "NOME" }, { key: "cnpj", label: "CNPJ" }, { key: "phone", label: "TELEFONE" }, { key: "email", label: "E-MAIL" }, { key: "address", label: "ENDEREÇO" }, { key: "distance_km", label: "KM DO DEPÓSITO" }]} />
   );
 }
 

@@ -122,10 +122,10 @@ export default function CustomerAddressFields({ editing, setEditing }) {
           </div>
         </div>
         <div className="text-[11px] font-mono text-neutral-500">
-          <div>Número da residência</div>
+          <div>Número do endereço</div>
           <input
             className="crud-input mt-1"
-            aria-label="Número da residência"
+            aria-label="Número do endereço"
             value={editing.address_number ?? ""}
             onChange={(event) => changeNumber(event.target.value)}
             data-testid="field-address_number"

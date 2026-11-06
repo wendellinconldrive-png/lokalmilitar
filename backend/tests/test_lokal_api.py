@@ -1214,7 +1214,13 @@ def test_trip_supports_multiple_destinations_fuelings_tolls_and_allowance(admin)
     )
     supplier_response = admin.post(
         f"{BASE_URL}/api/suppliers",
-        json={"name": f"TEST_Fornecedor_{uuid.uuid4().hex[:6]}", "distance_km": 15},
+        json={
+            "name": f"TEST_Fornecedor_{uuid.uuid4().hex[:6]}",
+            "cep": "21745590",
+            "address_number": "550",
+            "address": "Rua Salustiano Silva, 550, CEP 21745-590",
+            "distance_km": 15,
+        },
     )
     vehicle_response = admin.post(
         f"{BASE_URL}/api/vehicles",
@@ -1226,6 +1232,9 @@ def test_trip_supports_multiple_destinations_fuelings_tolls_and_allowance(admin)
     customer = customer_response.json()
     supplier = supplier_response.json()
     vehicle = vehicle_response.json()
+    assert supplier["cep"] == "21745590"
+    assert supplier["address_number"] == "550"
+    assert supplier["address"] == "Rua Salustiano Silva, 550, CEP 21745-590"
     CREATED["customers"].append(customer["id"])
     CREATED["suppliers"].append(supplier["id"])
     CREATED["vehicles"].append(vehicle["id"])
