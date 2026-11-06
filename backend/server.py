@@ -509,6 +509,8 @@ class Order(BaseModel):
     vehicle_name: Optional[str] = None
     delivery_type: Optional[str] = None  # ENTREGA | RETIRADA | CORREIO
     signature: Optional[str] = None
+    whatsapp_shared_at: Optional[str] = None
+    whatsapp_share_count: int = 0
     stock_applied: bool = False
     created_at: str = Field(default_factory=now_iso)
     log: List[str] = []  # log de desmontagem etc
@@ -1920,6 +1922,16 @@ async def get_order(oid: str, user: dict = Depends(get_current_user)):
     if not order:
         raise HTTPException(404, "Pedido não encontrado")
     return order
+
+@api.post("/orders/{oid}/whatsapp-shared")
+async def mark_order_whatsapp_shared(oid: str, user: dict = Depends(get_current_user)):
+    result = await db.orders.update_one(
+        {"id": oid},
+        {"$set": {"whatsapp_shared_at": now_iso()}, "$inc": {"whatsapp_share_count": 1}},
+    )
+    if not result.matched_count:
+        raise HTTPException(404, "Pedido não encontrado")
+    return await db.orders.find_one({"id": oid}, {"_id": 0})
 
 @api.post("/orders")
 async def create_order(payload: dict, user: dict = Depends(get_current_user)):

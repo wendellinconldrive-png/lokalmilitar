@@ -5,7 +5,7 @@ import html2canvas from "html2canvas";
 import { api, formatBRL, formatDateShort } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
-import { Plus, Edit, Trash2, Printer, FileText, Truck, Check, Download, SlidersHorizontal } from "lucide-react";
+import { Plus, Edit, Trash2, Printer, FileText, Truck, Check, Download, SlidersHorizontal, MessageCircle } from "lucide-react";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import PrintOrderA4, { PrintOrder80mm } from "@/components/PrintOrder";
@@ -80,6 +80,7 @@ export default function Orders({ mode }) {
   const [fulfillment, setFulfillment] = useState(null);
   const [autoPrintPending, setAutoPrintPending] = useState(false);
   const [savingJpeg, setSavingJpeg] = useState(false);
+  const [sharingJpeg, setSharingJpeg] = useState(false);
   const jpegTargetRef = useRef(null);
   const pendingProductFocusIndex = useRef(null);
   const [printRoot, setPrintRoot] = useState(null);
@@ -545,32 +546,98 @@ export default function Orders({ mode }) {
     await new Promise((resolve) => window.requestAnimationFrame(() => window.requestAnimationFrame(resolve)));
     window.setTimeout(() => window.print(), pdf ? 250 : 100);
   };
+  const createOrderJpeg = async () => {
+    if (!jpegTargetRef.current) throw new Error("Pré-visualização A4 indisponível");
+    if (document.fonts?.ready) await document.fonts.ready;
+    const element = jpegTargetRef.current;
+    const content = await html2canvas(element, {
+      scale: 2,
+      width: element.scrollWidth,
+      height: element.scrollHeight,
+      windowWidth: Math.max(document.documentElement.clientWidth, element.scrollWidth),
+      windowHeight: Math.max(document.documentElement.clientHeight, element.scrollHeight),
+      backgroundColor: "#ffffff",
+      logging: false,
+      useCORS: true,
+    });
+    const page = document.createElement("canvas");
+    page.width = 2480;
+    page.height = 3508;
+    const context = page.getContext("2d");
+    if (!context) throw new Error("Não foi possível preparar a página A4");
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, page.width, page.height);
+    const scale = Math.min(page.width / content.width, page.height / content.height);
+    const width = content.width * scale;
+    const height = content.height * scale;
+    context.drawImage(content, (page.width - width) / 2, 0, width, height);
+    return new Promise((resolve, reject) => {
+      page.toBlob((blob) => blob ? resolve(blob) : reject(new Error("Não foi possível gerar a imagem JPEG")), "image/jpeg", 0.95);
+    });
+  };
+  const downloadOrderJpeg = (blob) => {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `pedido-${printing.number}-lokal-militar.jpg`;
+    link.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
   const saveJpeg = async () => {
     if (printMode !== "a4" || !jpegTargetRef.current || savingJpeg) return;
     setSavingJpeg(true);
     try {
-      if (document.fonts?.ready) await document.fonts.ready;
-      const canvas = await html2canvas(jpegTargetRef.current, {
-        scale: 2,
-        backgroundColor: "#ffffff",
-        logging: false,
-        useCORS: true,
-      });
-      const blob = await new Promise((resolve, reject) => {
-        canvas.toBlob((result) => result ? resolve(result) : reject(new Error("Não foi possível gerar a imagem JPEG")), "image/jpeg", 0.95);
-      });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = `pedido-${printing.number}-lokal-militar.jpg`;
-      link.click();
-      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      const blob = await createOrderJpeg();
+      downloadOrderJpeg(blob);
       toast.success("Imagem JPEG do pedido salva");
     } catch (error) {
       console.error("Erro ao exportar pedido como JPEG", error);
       toast.error("Não foi possível gerar o JPEG. Tente novamente ou use a opção de impressão.");
     } finally {
       setSavingJpeg(false);
+    }
+  };
+  const shareOrderOnWhatsApp = async () => {
+    if (printMode !== "a4" || !jpegTargetRef.current || sharingJpeg) return;
+    if (printing.whatsapp_shared_at && !window.confirm(
+      `A imagem do pedido #${printing.number} já foi compartilhada${printing.whatsapp_share_count > 1 ? ` ${printing.whatsapp_share_count} vezes` : " uma vez"}. Deseja compartilhar novamente?`,
+    )) return;
+    setSharingJpeg(true);
+    try {
+      const blob = await createOrderJpeg();
+      const file = new File([blob], `pedido-${printing.number}-lokal-militar.jpg`, { type: "image/jpeg" });
+      if (!navigator.share || (navigator.canShare && !navigator.canShare({ files: [file] }))) {
+        downloadOrderJpeg(blob);
+        window.open(`https://wa.me/?text=${encodeURIComponent(`Pedido #${printing.number} - Lokal Militar`)}`, "_blank", "noopener,noreferrer");
+        toast.info("Este navegador não permite anexar a imagem direto. O JPEG foi salvo; anexe-o no WhatsApp.");
+        return;
+      }
+      await navigator.share({
+        files: [file],
+        title: `Pedido #${printing.number} · Lokal Militar`,
+        text: `Pedido #${printing.number} · Lokal Militar`,
+      });
+      if (!window.confirm(`Você enviou a imagem do pedido #${printing.number} pelo WhatsApp?`)) {
+        toast.info("Envio não marcado. Você poderá compartilhar o pedido novamente quando quiser.");
+        return;
+      }
+      try {
+        const { data } = await api.post(`/orders/${printing.id}/whatsapp-shared`);
+        setPrinting(data);
+        setOrders((current) => current.map((order) => order.id === data.id ? data : order));
+        toast.success("Envio pelo WhatsApp registrado");
+      } catch (error) {
+        toast.error(error.response?.data?.detail || "Imagem compartilhada, mas não foi possível registrar o compartilhamento");
+      }
+    } catch (error) {
+      if (error.name === "AbortError") {
+        toast.info("Compartilhamento cancelado");
+      } else {
+        console.error("Erro ao compartilhar pedido", error);
+        toast.error(error.response?.data?.detail || "Não foi possível compartilhar a imagem do pedido");
+      }
+    } finally {
+      setSharingJpeg(false);
     }
   };
 
@@ -854,7 +921,21 @@ export default function Orders({ mode }) {
             </div>
             <button className="lm-btn lm-btn-olive" onClick={() => runPrint(false)} data-testid="preview-print"><Printer size={15}/>Imprimir</button>
             <button className="lm-btn lm-btn-gold" onClick={() => runPrint(true)} data-testid="preview-pdf"><FileText size={15}/>Salvar PDF</button>
-            {printMode === "a4" && <button className="lm-btn lm-btn-outline" onClick={saveJpeg} disabled={savingJpeg} data-testid="preview-jpeg"><Download size={15}/>{savingJpeg ? "Gerando JPEG..." : "Salvar JPEG"}</button>}
+            {printMode === "a4" && <>
+              <button
+                className={`lm-btn ${printing?.whatsapp_shared_at ? "bg-green-700 text-white hover:bg-green-800" : "lm-btn-outline"}`}
+                onClick={shareOrderOnWhatsApp}
+                disabled={sharingJpeg}
+                data-testid="preview-whatsapp"
+                title={printing?.whatsapp_shared_at ? "Já compartilhado anteriormente; clique para reenviar" : "Compartilhar imagem do pedido pelo WhatsApp"}
+              >
+                <MessageCircle size={15}/>{sharingJpeg ? "Preparando imagem..." : printing?.whatsapp_shared_at ? "Já compartilhado · reenviar" : "Enviar imagem pelo WhatsApp"}
+              </button>
+              <button className="lm-btn lm-btn-outline" onClick={saveJpeg} disabled={savingJpeg} data-testid="preview-jpeg"><Download size={15}/>{savingJpeg ? "Gerando JPEG..." : "Salvar JPEG A4"}</button>
+            </>}
+            {printing?.whatsapp_shared_at && <span className="text-xs text-green-800 self-center" data-testid="whatsapp-shared-status">
+              Compartilhado em {formatDateShort(printing.whatsapp_shared_at)} · {printing.whatsapp_share_count || 1} vez(es)
+            </span>}
           </div>
           <div className="bg-neutral-300 p-4 rounded flex justify-center overflow-x-auto">
             <div className="shadow-lg">

@@ -15,6 +15,7 @@ from server import (  # noqa: E402
     _build_destination_geocoding_address,
     _geocode_for_distance,
     _prepare_trip,
+    mark_order_whatsapp_shared,
 )
 
 
@@ -88,3 +89,29 @@ def test_gnv_trip_calculates_fuel_in_cubic_meters(monkeypatch):
     assert trip["fuelings"][1]["quantity"] == 4
     assert trip["fuelings"][1]["unit"] == "L"
     assert trip["fuel_cost"] == 34
+
+
+def test_order_whatsapp_share_records_time_and_count(monkeypatch):
+    class Orders:
+        def __init__(self):
+            self.order = {"id": "order-1", "whatsapp_share_count": 1}
+
+        async def update_one(self, query, update):
+            assert query == {"id": "order-1"}
+            self.order["whatsapp_shared_at"] = update["$set"]["whatsapp_shared_at"]
+            self.order["whatsapp_share_count"] += update["$inc"]["whatsapp_share_count"]
+            return type("UpdateResult", (), {"matched_count": 1})()
+
+        async def find_one(self, query, projection):
+            assert query == {"id": "order-1"}
+            assert projection == {"_id": 0}
+            return self.order
+
+    class Database:
+        orders = Orders()
+
+    monkeypatch.setattr("server.db", Database())
+    order = asyncio.run(mark_order_whatsapp_shared("order-1", user={"id": "user-1"}))
+
+    assert order["whatsapp_shared_at"]
+    assert order["whatsapp_share_count"] == 2
