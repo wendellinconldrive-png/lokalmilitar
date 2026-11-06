@@ -216,6 +216,7 @@ async def _prepare_trip(doc: dict) -> dict:
         doc["description"] = doc.get("description") or f"Viagem até {', '.join(destination_names)}"
 
     vehicle_id = doc.get("vehicle_id")
+    vehicle_fuels = []
     if vehicle_id:
         vehicle = await db.vehicles.find_one({"id": vehicle_id, "active": {"$ne": False}}, {"_id": 0})
         if not vehicle:
@@ -227,13 +228,13 @@ async def _prepare_trip(doc: dict) -> dict:
                 raise HTTPException(400, "Combustível não cadastrado para este veículo")
             doc["fuel_type"] = doc.get("fuel_type") or vehicle_fuels[0]
         doc["avg_consumption"] = float(doc.get("avg_consumption") or vehicle.get("avg_consumption") or 0)
-    fuel_unit = "m³" if doc.get("fuel_type") == "GNV" else "L"
+    trip_fuel_unit = "m³" if doc.get("fuel_type") == "GNV" else "L"
     consumption = float(doc.get("avg_consumption") or 0)
     km = max(float(doc.get("km") or 0), 0)
     estimated_quantity = round(km / consumption, 2) if consumption > 0 else 0
-    doc["fuel_quantity_unit"] = fuel_unit
+    doc["fuel_quantity_unit"] = trip_fuel_unit
     doc["estimated_fuel_quantity"] = estimated_quantity
-    doc["estimated_fuel_liters"] = estimated_quantity if fuel_unit == "L" else 0
+    doc["estimated_fuel_liters"] = estimated_quantity if trip_fuel_unit == "L" else 0
     fillup_records = doc.get("fuelings") or []
     if not isinstance(fillup_records, list) or any(not isinstance(fillup, dict) for fillup in fillup_records):
         raise HTTPException(400, "A lista de abastecimentos é inválida")
@@ -253,36 +254,49 @@ async def _prepare_trip(doc: dict) -> dict:
         raise HTTPException(400, "A diária deve ser um valor não negativo")
     doc["daily_allowance"] = daily_allowance
     fuelings = []
+    fuel_quantities = {}
     for fillup in fillup_records:
+        fuel_type = fillup.get("fuel_type") or doc.get("fuel_type")
+        if fuel_type not in FUEL_TYPES:
+            raise HTTPException(400, "Combustível inválido no abastecimento")
+        if vehicle_fuels and fuel_type not in vehicle_fuels:
+            raise HTTPException(400, "Combustível do abastecimento não cadastrado para este veículo")
+        fillup_unit = "m³" if fuel_type == "GNV" else "L"
+        configured_fillup_price = (settings or {}).get("fuel_prices", {}).get(fuel_type, 0)
         try:
-            fillup_price = float(fillup.get("price_per_unit") or fillup.get("price_per_liter") or price)
+            default_fillup_price = price if fuel_type == doc.get("fuel_type") else configured_fillup_price
+            fillup_price = float(fillup.get("price_per_unit") or fillup.get("price_per_liter") or default_fillup_price)
             amount = float(fillup.get("amount") or 0)
         except (TypeError, ValueError) as error:
             raise HTTPException(400, "Informe valores válidos para cada abastecimento") from error
         if not math.isfinite(fillup_price) or fillup_price < 0 or not math.isfinite(amount) or amount < 0:
             raise HTTPException(400, "Os valores dos abastecimentos devem ser não negativos")
         quantity = round(amount / fillup_price, 2) if fillup_price > 0 else 0
+        fuel_quantities.setdefault(fuel_type, {"quantity": 0, "unit": fillup_unit})
+        fuel_quantities[fuel_type]["quantity"] = round(fuel_quantities[fuel_type]["quantity"] + quantity, 2)
         fuelings.append({
             "amount": amount,
             "price_per_unit": fillup_price,
             "price_per_liter": fillup_price,
-            "fuel_type": fillup.get("fuel_type") or doc.get("fuel_type"),
+            "fuel_type": fuel_type,
             "quantity": quantity,
-            "unit": fuel_unit,
-            "liters": quantity if fuel_unit == "L" else 0,
+            "unit": fillup_unit,
+            "liters": quantity if fillup_unit == "L" else 0,
         })
     doc["fuelings"] = fuelings
+    doc["fuel_quantities"] = fuel_quantities
     if fuelings:
         doc["fuel_cost"] = round(sum(float(fillup["amount"]) for fillup in fuelings), 2)
-        total_quantity = round(sum(float(fillup["quantity"]) for fillup in fuelings), 2)
-        doc["fuel_quantity"] = total_quantity
-        doc["fuel_liters"] = total_quantity if fuel_unit == "L" else 0
-        if total_quantity > 0:
-            doc["fuel_price_per_unit"] = round(doc["fuel_cost"] / total_quantity, 2)
+        selected_quantity = fuel_quantities.get(doc.get("fuel_type"), {}).get("quantity", 0)
+        doc["fuel_quantity"] = selected_quantity
+        doc["fuel_liters"] = selected_quantity if trip_fuel_unit == "L" else 0
+        selected_cost = sum(fillup["amount"] for fillup in fuelings if fillup["fuel_type"] == doc.get("fuel_type"))
+        if selected_quantity > 0:
+            doc["fuel_price_per_unit"] = round(selected_cost / selected_quantity, 2)
             doc["fuel_price_per_liter"] = doc["fuel_price_per_unit"]
     else:
         doc["fuel_quantity"] = estimated_quantity
-        doc["fuel_liters"] = estimated_quantity if fuel_unit == "L" else 0
+        doc["fuel_liters"] = estimated_quantity if trip_fuel_unit == "L" else 0
         if price > 0:
             doc["fuel_cost"] = round(estimated_quantity * price, 2)
     toll_records = doc.get("tolls") or []
@@ -583,6 +597,7 @@ class Expense(BaseModel):
     estimated_fuel_quantity: float = 0
     fuel_quantity_unit: str = "L"
     fuel_price_per_unit: float = 0
+    fuel_quantities: dict = Field(default_factory=dict)
     km: float = 0
     odometer_km: Optional[float] = None
     day_close_date: Optional[str] = None

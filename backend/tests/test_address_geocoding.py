@@ -58,10 +58,10 @@ def test_gnv_trip_calculates_fuel_in_cubic_meters(monkeypatch):
         vehicles = Collection({
             "id": "vehicle-1",
             "name": "Veículo GNV",
-            "fuel_types": ["GNV"],
+            "fuel_types": ["GNV", "Gasolina"],
             "avg_consumption": 25,
         })
-        settings = Collection({"fuel_prices": {"GNV": 2}})
+        settings = Collection({"fuel_prices": {"GNV": 2, "Gasolina": 6}})
 
     monkeypatch.setattr("server.db", Database())
     trip = asyncio.run(_prepare_trip({
@@ -69,12 +69,22 @@ def test_gnv_trip_calculates_fuel_in_cubic_meters(monkeypatch):
         "fuel_type": "GNV",
         "km": 100,
         "fuel_price_per_unit": 2,
-        "fuelings": [{"amount": 10, "price_per_unit": 2}],
+        "fuelings": [
+            {"amount": 10, "price_per_unit": 2, "fuel_type": "GNV"},
+            {"amount": 24, "price_per_unit": 6, "fuel_type": "Gasolina"},
+        ],
     }))
 
     assert trip["fuel_quantity_unit"] == "m³"
     assert trip["fuel_quantity"] == 5
+    assert trip["fuel_quantities"] == {
+        "GNV": {"quantity": 5, "unit": "m³"},
+        "Gasolina": {"quantity": 4, "unit": "L"},
+    }
     assert trip["estimated_fuel_quantity"] == 4
     assert trip["fuel_liters"] == 0
     assert trip["fuelings"][0]["quantity"] == 5
     assert trip["fuelings"][0]["liters"] == 0
+    assert trip["fuelings"][1]["quantity"] == 4
+    assert trip["fuelings"][1]["unit"] == "L"
+    assert trip["fuel_cost"] == 34
