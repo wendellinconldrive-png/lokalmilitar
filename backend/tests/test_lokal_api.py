@@ -870,6 +870,83 @@ class TestOrders:
             if expense.get("order_id") == order["id"]
         ]
 
+    def test_excluir_viagem_vinculada_ao_pedido_atualiza_km_e_fechamento(self, admin):
+        customer_response = admin.post(
+            f"{BASE_URL}/api/customers",
+            json={
+                "name": f"TEST_Cliente_Excluir_Viagem_{uuid.uuid4().hex[:6]}",
+                "address": "Rua da Teste",
+                "distance_km": 12,
+            },
+        )
+        assert customer_response.status_code == 200, customer_response.text
+        customer = customer_response.json()
+        CREATED["customers"].append(customer["id"])
+        vehicle_response = admin.post(
+            f"{BASE_URL}/api/vehicles",
+            json={
+                "name": f"TEST_Veiculo_Excluir_Viagem_{uuid.uuid4().hex[:6]}",
+                "current_km": 100,
+            },
+        )
+        assert vehicle_response.status_code == 200, vehicle_response.text
+        vehicle = vehicle_response.json()
+        CREATED["vehicles"].append(vehicle["id"])
+        product = _prod(admin, "TEST_Produto_Excluir_Viagem", [{"size": "U", "stock": 2}])
+        order_response = admin.post(
+            f"{BASE_URL}/api/orders",
+            json={
+                "customer_id": customer["id"],
+                "customer_name": customer["name"],
+                "items": [{
+                    "product_id": product["id"],
+                    "name": product["name"],
+                    "size": "U",
+                    "qty": 1,
+                    "unit_price": 10,
+                }],
+            },
+        )
+        assert order_response.status_code == 200, order_response.text
+        order = order_response.json()
+        CREATED["orders"].append(order["id"])
+        delivered = admin.post(
+            f"{BASE_URL}/api/orders/{order['id']}/fulfill",
+            json={"delivery_type": "ENTREGA", "vehicle_id": vehicle["id"]},
+        )
+        assert delivered.status_code == 200, delivered.text
+        trips = [
+            expense for expense in admin.get(f"{BASE_URL}/api/expenses").json()
+            if expense.get("order_id") == order["id"]
+        ]
+        assert len(trips) == 1
+        trip = trips[0]
+        assert trip["km"] == 24
+        report = admin.post(f"{BASE_URL}/api/dashboard/close-day")
+        assert report.status_code == 200, report.text
+        assert any(expense.get("id") == trip["id"] for expense in report.json()["expenses"])
+
+        deleted = admin.delete(f"{BASE_URL}/api/expenses/{trip['id']}")
+        assert deleted.status_code == 200, deleted.text
+        assert deleted.json()["deleted"] == 1
+        assert not [
+            expense for expense in admin.get(f"{BASE_URL}/api/expenses").json()
+            if expense.get("id") == trip["id"]
+        ]
+        updated_vehicle = next(
+            item for item in admin.get(f"{BASE_URL}/api/vehicles").json()
+            if item["id"] == vehicle["id"]
+        )
+        assert updated_vehicle["current_km"] == 100
+        updated_report = admin.get(
+            f"{BASE_URL}/api/dashboard/closures/{report.json()['date']}"
+        )
+        assert updated_report.status_code == 200, updated_report.text
+        assert not any(
+            expense.get("id") == trip["id"]
+            for expense in updated_report.json()["expenses"]
+        )
+
     def test_admin_altera_status_e_sincroniza_estoque(self, admin):
         p = _prod(admin, "TEST_Coturno", [{"size": "40", "stock": 5}])
         o = admin.post(f"{BASE_URL}/api/orders", json={"customer_name": "TEST_Cli", "status": "Aprovado",

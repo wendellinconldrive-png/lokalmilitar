@@ -30,10 +30,13 @@ export const CrudPage = ({ title, subtitle, endpoint, fields, columns, defaults 
     } catch (e) { toast.error(e.response?.data?.detail || "Erro ao salvar"); }
   });
 
-  const remove = async (id) => {
-    if (!window.confirm("Excluir registro?")) return;
+  const remove = async (row) => {
+    const confirmation = endpoint === "expenses" && row.type === "VIAGEM"
+      ? "Excluir esta viagem? A quilometragem do veículo e o fechamento do dia também serão atualizados."
+      : "Excluir registro?";
+    if (!window.confirm(confirmation)) return;
     try {
-      await api.delete(`/${endpoint}/${id}`);
+      await api.delete(`/${endpoint}/${row.id}`);
       toast.success("Removido");
       load();
     } catch (error) {
@@ -71,7 +74,7 @@ export const CrudPage = ({ title, subtitle, endpoint, fields, columns, defaults 
                 <td className="p-2 whitespace-nowrap">
                   <button className="p-1 hover:bg-neutral-200" onClick={() => setEditing(prepareEdit ? prepareEdit(r) : { ...r })} data-testid={`${testid}-edit-${r.id}`}><Edit size={13} /></button>
                   {rowActions?.(r, load)}
-                  <button className="p-1 hover:bg-red-100 text-red-700" onClick={() => remove(r.id)} data-testid={`${testid}-delete-${r.id}`}><Trash2 size={13} /></button>
+                  <button className="p-1 hover:bg-red-100 text-red-700" onClick={() => remove(r)} data-testid={`${testid}-delete-${r.id}`}><Trash2 size={13} /></button>
                 </td>
               </tr>
             ))}

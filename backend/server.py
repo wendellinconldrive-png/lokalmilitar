@@ -784,13 +784,12 @@ def make_crud(coll_name: str, Model, route_name: Optional[str] = None):
     @router.delete("/{item_id}")
     async def delete(item_id: str, user: dict = Depends(get_current_user)):
         old = await db[coll_name].find_one({"id": item_id}, {"_id": 0}) if coll_name == "expenses" else None
-        if old and old.get("order_id"):
-            raise HTTPException(400, "A viagem vinculada a um pedido não pode ser excluída por aqui")
         if coll_name == "vendors" and await db.users.find_one({"vendor_id": item_id}):
             raise HTTPException(400, "Desvincule o vendedor da conta de acesso antes de excluí-lo")
         res = await db[coll_name].delete_one({"id": item_id})
         if old and old.get("type") == "VIAGEM":
             await _change_vehicle_km(old.get("vehicle_id"), -float(old.get("km") or 0))
+            await _refresh_day_closure(_business_date(old.get("date")), user)
         return {"deleted": res.deleted_count}
 
     return router
