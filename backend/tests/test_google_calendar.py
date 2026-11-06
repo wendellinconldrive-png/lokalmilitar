@@ -17,7 +17,10 @@ def test_local_date_keeps_date_only_values_in_sao_paulo():
 
 def test_calendar_events_include_dashboard_maintenance_and_open_orders():
     events = google_calendar.build_calendar_events(
-        [{"id": "event-1", "title": "Evento", "event_date": "2026-11-05"}],
+        [
+            {"id": "event-1", "title": "Evento", "event_date": "2026-11-05"},
+            {"id": "event-archived", "title": "Executado", "event_date": "2026-11-05", "archived": True},
+        ],
         [
             {
                 "id": "maintenance-1",
@@ -72,6 +75,7 @@ def test_due_notifications_cover_event_day_previous_day_and_pending_orders():
             {"id": "event-tomorrow", "title": "Reunião", "event_date": "2026-11-04"},
             {"id": "event-today", "title": "Entrega", "event_date": "2026-11-03"},
             {"id": "event-later", "title": "Futuro", "event_date": "2026-11-08"},
+            {"id": "event-archived", "title": "Executado", "event_date": "2026-11-03", "archived": True},
         ],
         [
             {

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Outlet, NavLink, Navigate, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import BrandMark from "@/components/BrandMark";
@@ -35,6 +35,39 @@ export default function AppLayout() {
   const [pushPromptOpen, setPushPromptOpen] = useState(false);
   const [pushConfigured, setPushConfigured] = useState(false);
   const [pushActivating, setPushActivating] = useState(false);
+  const [pendingDialogOpen, setPendingDialogOpen] = useState(false);
+  const [pendingItems, setPendingItems] = useState([]);
+  const pendingPopupUser = useRef("");
+
+  useEffect(() => {
+    if (!user?.id || user.id === "public-access") {
+      pendingPopupUser.current = "";
+      return undefined;
+    }
+    if (pendingPopupUser.current === user.id) return undefined;
+    pendingPopupUser.current = user.id;
+    const token = localStorage.getItem("lokal_token") || sessionStorage.getItem("lokal_token") || "";
+    const shownKey = `lokal-pending-popup:${user.id}:${token.slice(-16) || "session"}`;
+    if (sessionStorage.getItem(shownKey)) return undefined;
+    let cancelled = false;
+    api.get("/dashboard/pending")
+      .then(({ data }) => {
+        if (cancelled) return;
+        const items = Array.isArray(data.items) ? data.items : [];
+        sessionStorage.setItem(shownKey, "shown");
+        if (items.length) {
+          setPendingItems(items);
+          setPendingDialogOpen(true);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          console.error("Não foi possível carregar as pendências da sessão.", error);
+          toast.error(error.response?.data?.detail || "Não foi possível carregar as pendências");
+        }
+      });
+    return () => { cancelled = true; };
+  }, [user?.id]);
 
   const enableCloseNotifications = async () => {
     if (!("Notification" in window)) {
@@ -166,6 +199,38 @@ export default function AppLayout() {
 
   return (
     <div className="App flex" style={{ minHeight: "100vh" }}>
+      <Dialog open={pendingDialogOpen} onOpenChange={setPendingDialogOpen}>
+        <DialogContent className="max-h-[85vh] overflow-y-auto" data-testid="pending-items-dialog">
+          <DialogHeader>
+            <DialogTitle className="font-head">Pendências do sistema</DialogTitle>
+            <DialogDescription>Confira anotações, pedidos em aberto e manutenções programadas.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            {pendingItems.map((item) => (
+              <button
+                type="button"
+                key={item.id}
+                className="w-full border p-3 text-left hover:bg-neutral-100"
+                onClick={() => {
+                  setPendingDialogOpen(false);
+                  navigate(item.url || "/");
+                }}
+                data-testid={`pending-item-${item.type}`}
+              >
+                <span className="block text-xs uppercase text-neutral-500">
+                  {item.type === "anotacao" ? "Anotação" : item.type === "pedido" ? "Pedido" : "Manutenção"}
+                  {item.date ? ` · ${new Date(`${item.date}T00:00:00`).toLocaleDateString("pt-BR")}` : ""}
+                </span>
+                <span className="block font-semibold">{item.title}</span>
+                {item.body && <span className="block text-sm text-neutral-600">{item.body}</span>}
+              </button>
+            ))}
+          </div>
+          <DialogFooter>
+            <button type="button" className="lm-btn lm-btn-dark" onClick={() => setPendingDialogOpen(false)}>Fechar</button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <Dialog open={pushPromptOpen} onOpenChange={setPushPromptOpen}>
         <DialogContent>
           <DialogHeader>

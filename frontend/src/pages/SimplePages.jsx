@@ -120,10 +120,169 @@ const recalculateTrip = (trip, changes = {}) => {
   const updated = { ...trip, ...changes };
   const km = Math.max(Number(updated.km || 0), 0);
   const consumption = Number(updated.avg_consumption || 0);
-  const liters = consumption > 0 ? Math.round((km / consumption) * 100) / 100 : 0;
+  const estimatedLiters = consumption > 0 ? Math.round((km / consumption) * 100) / 100 : 0;
   const price = Math.max(Number(updated.fuel_price_per_liter || 0), 0);
-  return { ...changes, fuel_liters: liters, fuel_cost: Math.round(liters * price * 100) / 100 };
+  const fuelings = updated.fuelings || [];
+  const hasFuelings = fuelings.length > 0;
+  const liters = hasFuelings
+    ? fuelings.reduce((sum, fillup) => {
+      const fillupPrice = Number(fillup.price_per_liter || price || 0);
+      return fillupPrice > 0 ? sum + Number(fillup.amount || 0) / fillupPrice : sum;
+    }, 0)
+    : estimatedLiters;
+  const fuelCost = hasFuelings
+    ? fuelings.reduce((sum, fillup) => sum + Number(fillup.amount || 0), 0)
+    : estimatedLiters * price;
+  const tolls = updated.tolls || [];
+  const tollCost = Array.isArray(updated.tolls)
+    ? tolls.reduce((sum, toll) => sum + Number(toll.amount || 0), 0)
+    : Number(updated.toll_cost || 0);
+  return {
+    ...changes,
+    fuel_liters: Math.round(liters * 100) / 100,
+    estimated_fuel_liters: estimatedLiters,
+    fuel_cost: Math.round(fuelCost * 100) / 100,
+    toll_cost: Math.round(tollCost * 100) / 100,
+  };
 };
+
+function TripDestinationsField({ editing, setEditing, customers, suppliers }) {
+  const [destinationType, setDestinationType] = useState("cliente");
+  const [destinationId, setDestinationId] = useState("");
+  const destinations = editing.destinations?.length
+    ? editing.destinations
+    : editing.destination_id
+      ? [{ destination_type: editing.destination_type || "cliente", destination_id: editing.destination_id }]
+      : [];
+  const entries = destinationType === "fornecedor" ? suppliers : customers;
+  const updateDestinations = (nextDestinations) => {
+    const distance = nextDestinations.reduce((sum, stop) => {
+      const source = stop.destination_type === "fornecedor" ? suppliers : customers;
+      const entry = source.find((item) => item.id === stop.destination_id);
+      return sum + Number(entry?.distance_km || 0) * 2;
+    }, 0);
+    const routeStops = nextDestinations.map((stop) => {
+      const source = stop.destination_type === "fornecedor" ? suppliers : customers;
+      const entry = source.find((item) => item.id === stop.destination_id);
+      return entry?.address || entry?.name;
+    }).filter(Boolean);
+    setEditing({
+      ...editing,
+      destinations: nextDestinations,
+      destination_type: nextDestinations[0]?.destination_type || "cliente",
+      destination_id: nextDestinations[0]?.destination_id || "",
+      km: distance,
+      route: routeStops.length ? `Depósito → ${routeStops.join(" → ")} → Depósito` : "",
+      ...recalculateTrip(editing, { km: distance }),
+    });
+  };
+  const addDestination = () => {
+    if (!destinationId) return;
+    if (destinations.some((stop) => stop.destination_type === destinationType && stop.destination_id === destinationId)) {
+      toast.error("Este destino já foi adicionado");
+      return;
+    }
+    updateDestinations([...destinations, { destination_type: destinationType, destination_id: destinationId }]);
+    setDestinationId("");
+  };
+
+  return (
+    <div className="space-y-2" data-testid="trip-destinations">
+      <div className="grid grid-cols-1 sm:grid-cols-[1fr_1fr_auto] gap-2">
+        <select className="crud-input" value={destinationType} onChange={(event) => {
+          setDestinationType(event.target.value);
+          setDestinationId("");
+        }} data-testid="trip-destination-type">
+          <option value="cliente">Cliente</option>
+          <option value="fornecedor">Fornecedor</option>
+        </select>
+        <select className="crud-input" value={destinationId} onChange={(event) => setDestinationId(event.target.value)} data-testid="trip-destination-select">
+          <option value="">Selecione</option>
+          {entries.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}
+        </select>
+        <button type="button" className="lm-btn lm-btn-dark whitespace-nowrap" onClick={addDestination} disabled={!destinationId} data-testid="trip-add-destination">Adicionar destino</button>
+      </div>
+      {destinations.length ? (
+        <ol className="space-y-1">
+          {destinations.map((stop, index) => {
+            const source = stop.destination_type === "fornecedor" ? suppliers : customers;
+            const entry = source.find((item) => item.id === stop.destination_id);
+            return (
+              <li key={`${stop.destination_type}:${stop.destination_id}`} className="flex justify-between gap-2 text-xs border p-2">
+                <span>{index + 1}. {stop.destination_type === "fornecedor" ? "Fornecedor" : "Cliente"}: {entry?.name || stop.name || "Destino"}</span>
+                <button type="button" className="text-red-700" onClick={() => updateDestinations(destinations.filter((_, itemIndex) => itemIndex !== index))} aria-label={`Remover destino ${entry?.name || index + 1}`}>Remover</button>
+              </li>
+            );
+          })}
+        </ol>
+      ) : <p className="text-xs text-neutral-500">Adicione um ou mais clientes/fornecedores antes do retorno ao depósito.</p>}
+    </div>
+  );
+}
+
+function TripFuelingsField({ editing, setEditing, fuelPrices, recalculate }) {
+  const fuelings = editing.fuelings || [];
+  const setFuelings = (nextFuelings) => setEditing({
+    ...editing,
+    fuelings: nextFuelings,
+    ...recalculate(editing, { fuelings: nextFuelings }),
+  });
+  return (
+    <div className="space-y-2" data-testid="trip-fuelings">
+      {fuelings.map((fillup, index) => (
+        <div key={index} className="grid grid-cols-1 sm:grid-cols-[1fr_1fr_auto] gap-2 items-end border p-2">
+          <label className="text-xs">Valor gasto (R$)
+            <input className="crud-input" type="number" min="0" step="0.01" value={fillup.amount ?? ""} onChange={(event) => {
+              const next = fuelings.map((item, itemIndex) => itemIndex === index ? { ...item, amount: event.target.value } : item);
+              setFuelings(next);
+            }} data-testid={`trip-fueling-amount-${index}`} />
+          </label>
+          <label className="text-xs">Preço por litro (R$)
+            <input className="crud-input" type="number" min="0" step="0.01" value={fillup.price_per_liter ?? ""} onChange={(event) => {
+              const next = fuelings.map((item, itemIndex) => itemIndex === index ? { ...item, price_per_liter: event.target.value } : item);
+              setFuelings(next);
+            }} data-testid={`trip-fueling-price-${index}`} />
+          </label>
+          <button type="button" className="text-xs text-red-700 px-2 py-2" onClick={() => setFuelings(fuelings.filter((_, itemIndex) => itemIndex !== index))}>Remover</button>
+        </div>
+      ))}
+      <button type="button" className="lm-btn lm-btn-dark" onClick={() => setFuelings([...fuelings, {
+        amount: "",
+        price_per_liter: editing.fuel_price_per_liter || fuelPrices[editing.fuel_type] || "",
+      }])} data-testid="trip-add-fueling">Adicionar abastecimento</button>
+      <p className="text-xs text-neutral-600">Litros abastecidos são calculados pelo valor gasto ÷ preço por litro. Consumo estimado considera KM ÷ km/l do veículo.</p>
+    </div>
+  );
+}
+
+function TripTollsField({ editing, setEditing, recalculate }) {
+  const tolls = editing.tolls || [];
+  const setTolls = (nextTolls) => setEditing({
+    ...editing,
+    tolls: nextTolls,
+    ...recalculate(editing, { tolls: nextTolls }),
+  });
+  return (
+    <div className="space-y-2" data-testid="trip-tolls">
+      {tolls.map((toll, index) => (
+        <div key={index} className="grid grid-cols-1 sm:grid-cols-[1fr_1fr_auto] gap-2 items-end">
+          <label className="text-xs">Praça / observação
+            <input className="crud-input" value={toll.description || ""} onChange={(event) => {
+              setTolls(tolls.map((item, itemIndex) => itemIndex === index ? { ...item, description: event.target.value } : item));
+            }} />
+          </label>
+          <label className="text-xs">Valor (R$)
+            <input className="crud-input" type="number" min="0" step="0.01" value={toll.amount ?? ""} onChange={(event) => {
+              setTolls(tolls.map((item, itemIndex) => itemIndex === index ? { ...item, amount: event.target.value } : item));
+            }} data-testid={`trip-toll-amount-${index}`} />
+          </label>
+          <button type="button" className="text-xs text-red-700 px-2 py-2" onClick={() => setTolls(tolls.filter((_, itemIndex) => itemIndex !== index))}>Remover</button>
+        </div>
+      ))}
+      <button type="button" className="lm-btn lm-btn-dark" onClick={() => setTolls([...tolls, { description: "", amount: "" }])} data-testid="trip-add-toll">Adicionar pedágio</button>
+    </div>
+  );
+}
 
 export function Vehicles() {
   return (
@@ -258,8 +417,6 @@ export function Viagens() {
       })
       .catch(() => toast.error("Não foi possível carregar clientes, fornecedores e veículos"));
   }, []);
-  const destinationOptions = (editing) => (editing.destination_type === "fornecedor" ? suppliers : customers)
-    .map((entry) => ({ value: entry.id, label: entry.name }));
   const selectedVehicle = (editing) => vehicles.find((vehicle) => vehicle.id === editing.vehicle_id);
   const availableFuels = (editing) => {
     const vehicle = selectedVehicle(editing);
@@ -273,6 +430,11 @@ export function Viagens() {
     const price = Number(trip.fuel_price_per_liter || fuelPrices[fuel] || 0);
     return {
       ...trip,
+      destinations: trip.destinations?.length ? trip.destinations : trip.destination_id ? [{
+        destination_type: trip.destination_type || "cliente",
+        destination_id: trip.destination_id,
+      }] : [],
+      fuelings: trip.fuelings || [],
       ...recalculateTrip(trip, {
         fuel_type: fuel,
         avg_consumption: consumption,
@@ -301,17 +463,24 @@ export function Viagens() {
         })
         .sort((first, second) => String(first.date).localeCompare(String(second.date)));
       const totalKm = trips.reduce((sum, trip) => sum + Number(trip.km || 0), 0);
+      const totalExpenses = trips.reduce((sum, trip) => (
+        sum + Number(trip.fuel_cost || 0) + Number(trip.toll_cost || 0)
+        + Number(trip.daily_allowance || 0) + Number(trip.amount || 0)
+      ), 0);
       const rows = trips.map((trip) => `
         <tr><td>${escapeReportHtml(String(trip.date || "").slice(0, 10).split("-").reverse().join("/"))}</td>
         <td>${escapeReportHtml(trip.description)}</td><td>${escapeReportHtml(trip.route)}</td>
         <td>${escapeReportHtml(trip.vehicle_name || vehicles.find((vehicle) => vehicle.id === trip.vehicle_id)?.name || "—")}</td>
-        <td>${escapeReportHtml(trip.fuel_type || "—")}</td><td>${escapeReportHtml(Number(trip.km || 0).toLocaleString("pt-BR"))}</td></tr>`);
+        <td>${escapeReportHtml(trip.fuel_type || "—")}</td><td>${escapeReportHtml(Number(trip.km || 0).toLocaleString("pt-BR"))}</td>
+        <td>${escapeReportHtml(formatBRL(trip.fuel_cost))}</td><td>${escapeReportHtml(formatBRL(trip.toll_cost))}</td>
+        <td>${escapeReportHtml(formatBRL(trip.daily_allowance))}</td>
+        <td>${escapeReportHtml(formatBRL(Number(trip.fuel_cost || 0) + Number(trip.toll_cost || 0) + Number(trip.daily_allowance || 0) + Number(trip.amount || 0)))}</td></tr>`);
       printWindow.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Relatório de percursos · ${escapeReportHtml(range.label)}</title>
         <style>body{font:12px Arial,sans-serif;padding:24px;color:#222}h1{color:#354017;font-size:20px}table{width:100%;border-collapse:collapse;margin-top:16px}th,td{border:1px solid #aaa;padding:7px;text-align:left}th{background:#eee}.summary{margin-top:16px;padding:10px;border:1px solid #aaa;font-weight:bold}</style>
         </head><body><h1>LOKAL MILITAR — Relatório de percursos</h1><p>Período: ${escapeReportHtml(range.label)} · ${escapeReportHtml(range.start)} a ${escapeReportHtml(new Date(new Date(`${range.end}T00:00:00Z`).getTime() - 86400000).toISOString().slice(0, 10))}</p>
-        <table><thead><tr><th>Data</th><th>Percurso</th><th>Rota</th><th>Veículo</th><th>Combustível</th><th>KM percorridos</th></tr></thead>
-        <tbody>${rows.length ? rows.join("") : '<tr><td colspan="6" style="text-align:center">Nenhum percurso registrado no período.</td></tr>'}</tbody></table>
-        <div class="summary">Quilometragem total percorrida: ${escapeReportHtml(totalKm.toLocaleString("pt-BR"))} km</div></body></html>`);
+        <table><thead><tr><th>Data</th><th>Percurso</th><th>Rota</th><th>Veículo</th><th>Combustível</th><th>KM percorridos</th><th>Abastecimentos</th><th>Pedágios</th><th>Diária</th><th>Total</th></tr></thead>
+        <tbody>${rows.length ? rows.join("") : '<tr><td colspan="10" style="text-align:center">Nenhum percurso registrado no período.</td></tr>'}</tbody></table>
+        <div class="summary">Quilometragem total percorrida: ${escapeReportHtml(totalKm.toLocaleString("pt-BR"))} km · Despesas totais: ${escapeReportHtml(formatBRL(totalExpenses))}</div></body></html>`);
       printWindow.document.close();
       printWindow.setTimeout(() => printWindow.print(), 300);
     } catch (error) {
@@ -363,13 +532,9 @@ export function Viagens() {
       <CrudPage title="Viagens & Rotas" subtitle="Registro de rotas, combustível, pedágios e quilometragem fora das entregas" endpoint="expenses" testid="viagens"
       headerContent={travelReportFilters}
       filter={(r) => r.type === "VIAGEM"} prepareEdit={prepareTripEdit}
-      defaults={{ type: "VIAGEM", destination_type: "cliente", fuel_type: FUEL_TYPES[0], fuel_price_per_liter: Number(fuelPrices[FUEL_TYPES[0]] || 0), date: new Date().toISOString().slice(0, 10) }}
+      defaults={{ type: "VIAGEM", destination_type: "cliente", destinations: [], fuelings: [], tolls: [], fuel_type: FUEL_TYPES[0], fuel_price_per_liter: Number(fuelPrices[FUEL_TYPES[0]] || 0), date: new Date().toISOString().slice(0, 10) }}
       fields={[
-        { key: "destination_type", label: "Tipo de destino", type: "select", options: [{ value: "cliente", label: "Cliente" }, { value: "fornecedor", label: "Fornecedor" }], onChange: (value, editing) => ({ destination_type: value, destination_id: "", ...recalculateTrip(editing, { km: 0 }), route: "", description: "" }) },
-        { key: "destination_id", label: "Cliente / fornecedor cadastrado", type: "select", options: destinationOptions, onChange: (value, editing) => {
-          const entry = (editing.destination_type === "fornecedor" ? suppliers : customers).find((item) => item.id === value);
-          return { destination_id: value, ...recalculateTrip(editing, { km: Number(entry?.distance_km || 0) * 2 }), route: entry ? `Depósito → ${entry.address || entry.name} → Depósito` : "", description: entry ? `Viagem até ${entry.name}` : "" };
-        } },
+        { key: "destinations", label: "Destinos antes do retorno ao estoque", wide: true, render: ({ editing, setEditing }) => <TripDestinationsField editing={editing} setEditing={setEditing} customers={customers} suppliers={suppliers} /> },
         { key: "description", label: "Destino / Objetivo", required: true, wide: true },
         { key: "route", label: "Rota (origem → destino)", wide: true },
         { key: "date", label: "Data", type: "date" },
@@ -387,10 +552,14 @@ export function Viagens() {
           return { fuel_type: value, fuel_price_per_liter: price, ...recalculateTrip(editing, { fuel_type: value, fuel_price_per_liter: price }) };
         } },
         { key: "avg_consumption", label: "Consumo médio (km/l)", type: "number", onChange: (value, editing) => ({ avg_consumption: value, ...recalculateTrip(editing, { avg_consumption: value }) }) },
-        { key: "fuel_liters", label: "Litros estimados", type: "number", readOnly: true },
+        { key: "fuel_liters", label: "Litros abastecidos", type: "number", readOnly: true },
+        { key: "estimated_fuel_liters", label: "Consumo estimado no percurso (L)", type: "number", readOnly: true },
         { key: "fuel_price_per_liter", label: "Preço por litro (R$)", type: "number", onChange: (value, editing) => ({ fuel_price_per_liter: value, ...recalculateTrip(editing, { fuel_price_per_liter: value }) }) },
         { key: "fuel_cost", label: "Gasto combustível (R$)", type: "number", readOnly: true },
-        { key: "toll_cost", label: "Pedágios (R$)", type: "number" },
+        { key: "fuelings", label: "Abastecimentos", wide: true, render: ({ editing, setEditing }) => <TripFuelingsField editing={editing} setEditing={setEditing} fuelPrices={fuelPrices} recalculate={recalculateTrip} /> },
+        { key: "toll_cost", label: "Total de pedágios (R$)", type: "number", readOnly: true },
+        { key: "tolls", label: "Pedágios", wide: true, render: ({ editing, setEditing }) => <TripTollsField editing={editing} setEditing={setEditing} recalculate={recalculateTrip} /> },
+        { key: "daily_allowance", label: "Diária (R$)", type: "number" },
         { key: "amount", label: "Outros gastos (R$)", type: "number" },
       ]}
       columns={[
@@ -398,9 +567,10 @@ export function Viagens() {
         { key: "route", label: "ROTA" }, { key: "km", label: "KM" },
         { label: "KM NO PAINEL", render: (r) => r.odometer_km ?? "—" },
         { label: "COMBUSTÍVEL", render: (r) => formatBRL(r.fuel_cost) }, { label: "PEDÁGIOS", render: (r) => formatBRL(r.toll_cost) },
-        { label: "TOTAL", render: (r) => formatBRL(Number(r.fuel_cost || 0) + Number(r.toll_cost || 0) + Number(r.amount || 0)) },
+        { label: "DIÁRIA", render: (r) => formatBRL(r.daily_allowance) },
+        { label: "TOTAL", render: (r) => formatBRL(Number(r.fuel_cost || 0) + Number(r.toll_cost || 0) + Number(r.daily_allowance || 0) + Number(r.amount || 0)) },
       ]}
-      footer={(rows) => sumBox("Total em viagens", total(rows, (r) => Number(r.fuel_cost || 0) + Number(r.toll_cost || 0) + Number(r.amount || 0)))} />
+      footer={(rows) => sumBox("Total em viagens", total(rows, (r) => Number(r.fuel_cost || 0) + Number(r.toll_cost || 0) + Number(r.daily_allowance || 0) + Number(r.amount || 0)))} />
   );
 }
 

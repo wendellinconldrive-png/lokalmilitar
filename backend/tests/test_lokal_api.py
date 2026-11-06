@@ -1207,6 +1207,59 @@ def test_vehicle_fuels_and_trip_cost_use_settings(admin):
     assert invalid_fuel.status_code == 400, invalid_fuel.text
     admin.put(f"{BASE_URL}/api/settings", json={"fuel_prices": old_fuel_prices})
 
+def test_trip_supports_multiple_destinations_fuelings_tolls_and_allowance(admin):
+    customer_response = admin.post(
+        f"{BASE_URL}/api/customers",
+        json={"name": f"TEST_Cliente_{uuid.uuid4().hex[:6]}", "address": "Rua A", "distance_km": 10},
+    )
+    supplier_response = admin.post(
+        f"{BASE_URL}/api/suppliers",
+        json={"name": f"TEST_Fornecedor_{uuid.uuid4().hex[:6]}", "distance_km": 15},
+    )
+    vehicle_response = admin.post(
+        f"{BASE_URL}/api/vehicles",
+        json={"name": f"TEST_Veiculo_{uuid.uuid4().hex[:6]}", "avg_consumption": 10, "fuel_type": "Gasolina"},
+    )
+    assert customer_response.status_code == 200, customer_response.text
+    assert supplier_response.status_code == 200, supplier_response.text
+    assert vehicle_response.status_code == 200, vehicle_response.text
+    customer = customer_response.json()
+    supplier = supplier_response.json()
+    vehicle = vehicle_response.json()
+    CREATED["customers"].append(customer["id"])
+    CREATED["suppliers"].append(supplier["id"])
+    CREATED["vehicles"].append(vehicle["id"])
+
+    trip_response = admin.post(
+        f"{BASE_URL}/api/expenses",
+        json={
+            "type": "VIAGEM",
+            "description": "TEST_Rota múltipla",
+            "vehicle_id": vehicle["id"],
+            "destinations": [
+                {"destination_type": "cliente", "destination_id": customer["id"]},
+                {"destination_type": "fornecedor", "destination_id": supplier["id"]},
+            ],
+            "fuelings": [
+                {"amount": 100, "price_per_liter": 5},
+                {"amount": 60, "price_per_liter": 6},
+            ],
+            "tolls": [{"description": "Praça 1", "amount": 8}, {"amount": 12}],
+            "daily_allowance": 50,
+        },
+    )
+    assert trip_response.status_code == 200, trip_response.text
+    trip = trip_response.json()
+    CREATED["expenses"].append(trip["id"])
+    assert len(trip["destinations"]) == 2
+    assert trip["km"] == 50
+    assert trip["route"] == "Depósito → Rua A → " + supplier["name"] + " → Depósito"
+    assert trip["fuel_cost"] == 160
+    assert trip["fuel_liters"] == 30
+    assert trip["estimated_fuel_liters"] == 5
+    assert trip["toll_cost"] == 20
+    assert trip["daily_allowance"] == 50
+
 def test_order_number_sequence_is_admin_configurable_without_decreasing(admin):
     sequence = admin.get(f"{BASE_URL}/api/orders/number-sequence")
     assert sequence.status_code == 200, sequence.text
@@ -1328,6 +1381,14 @@ def test_dashboard_event_flow(admin):
         events_response = admin.get(f"{BASE_URL}/api/dashboard/events")
         assert events_response.status_code == 200, events_response.text
         assert event["id"] in {item["id"] for item in events_response.json()}
+        archived_response = admin.patch(
+            f"{BASE_URL}/api/dashboard/events/{event['id']}",
+            json={"archived": True},
+        )
+        assert archived_response.status_code == 200, archived_response.text
+        assert archived_response.json()["archived"] is True
+        archived_events = admin.get(f"{BASE_URL}/api/dashboard/events").json()
+        assert next(item for item in archived_events if item["id"] == event["id"])["archived"] is True
     finally:
         admin.delete(f"{BASE_URL}/api/dashboard/events/{event['id']}")
 

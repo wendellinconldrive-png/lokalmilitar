@@ -173,19 +173,46 @@ def strip_mongo(doc: dict) -> dict:
     return doc
 
 async def _prepare_trip(doc: dict) -> dict:
-    destination_type = doc.get("destination_type")
-    destination_id = doc.get("destination_id")
-    if destination_type and destination_id:
-        if destination_type not in ("cliente", "fornecedor"):
-            raise HTTPException(400, "Tipo de destino inválido")
+    destinations = doc.get("destinations") or []
+    if not isinstance(destinations, list):
+        raise HTTPException(400, "A lista de destinos é inválida")
+    if not destinations and doc.get("destination_type") and doc.get("destination_id"):
+        destinations = [{
+            "destination_type": doc["destination_type"],
+            "destination_id": doc["destination_id"],
+        }]
+    resolved_destinations = []
+    route_stops = []
+    destination_names = []
+    for stop in destinations:
+        destination_type = stop.get("destination_type")
+        destination_id = stop.get("destination_id")
+        if destination_type not in ("cliente", "fornecedor") or not destination_id:
+            raise HTTPException(400, "Informe um cliente ou fornecedor válido para cada destino")
         collection = db.customers if destination_type == "cliente" else db.suppliers
         destination = await collection.find_one({"id": destination_id}, {"_id": 0})
         if not destination:
             raise HTTPException(404, "Cliente ou fornecedor não encontrado")
         distance = max(float(destination.get("distance_km") or 0), 0)
-        doc["km"] = distance * 2
-        doc["route"] = f"Depósito → {destination.get('address') or destination['name']} → Depósito"
-        doc["description"] = doc.get("description") or f"Viagem até {destination['name']}"
+        name = destination.get("name") or "Destino"
+        address = destination.get("address") or name
+        resolved_destinations.append({
+            "destination_type": destination_type,
+            "destination_id": destination_id,
+            "name": name,
+            "address": address,
+            "distance_km": distance,
+        })
+        destination_names.append(name)
+        route_stops.append(address)
+    if resolved_destinations:
+        doc["destinations"] = resolved_destinations
+        first_destination = resolved_destinations[0]
+        doc["destination_type"] = first_destination["destination_type"]
+        doc["destination_id"] = first_destination["destination_id"]
+        doc["km"] = sum(stop["distance_km"] * 2 for stop in resolved_destinations)
+        doc["route"] = "Depósito → " + " → ".join(route_stops) + " → Depósito"
+        doc["description"] = doc.get("description") or f"Viagem até {', '.join(destination_names)}"
 
     vehicle_id = doc.get("vehicle_id")
     if vehicle_id:
@@ -201,14 +228,70 @@ async def _prepare_trip(doc: dict) -> dict:
         doc["avg_consumption"] = float(doc.get("avg_consumption") or vehicle.get("avg_consumption") or 0)
     consumption = float(doc.get("avg_consumption") or 0)
     km = max(float(doc.get("km") or 0), 0)
-    doc["fuel_liters"] = round(km / consumption, 2) if consumption > 0 else 0
+    estimated_liters = round(km / consumption, 2) if consumption > 0 else 0
+    doc["estimated_fuel_liters"] = estimated_liters
+    fillup_records = doc.get("fuelings") or []
+    if not isinstance(fillup_records, list) or any(not isinstance(fillup, dict) for fillup in fillup_records):
+        raise HTTPException(400, "A lista de abastecimentos é inválida")
     price = max(float(doc.get("fuel_price_per_liter") or 0), 0)
-    if price == 0 and doc.get("fuel_type"):
+    settings = None
+    if (price == 0 or fillup_records) and doc.get("fuel_type"):
         settings = await db.settings.find_one({"id": "singleton"}, {"_id": 0, "fuel_prices": 1})
+    if price == 0 and doc.get("fuel_type"):
         price = max(float((settings or {}).get("fuel_prices", {}).get(doc["fuel_type"]) or 0), 0)
         doc["fuel_price_per_liter"] = price
-    if price > 0:
-        doc["fuel_cost"] = round(doc["fuel_liters"] * price, 2)
+    try:
+        daily_allowance = float(doc.get("daily_allowance") or 0)
+    except (TypeError, ValueError) as error:
+        raise HTTPException(400, "Informe um valor válido para a diária") from error
+    if not math.isfinite(daily_allowance) or daily_allowance < 0:
+        raise HTTPException(400, "A diária deve ser um valor não negativo")
+    doc["daily_allowance"] = daily_allowance
+    fuelings = []
+    for fillup in fillup_records:
+        try:
+            fillup_price = float(fillup.get("price_per_liter") or price)
+            amount = float(fillup.get("amount") or 0)
+        except (TypeError, ValueError) as error:
+            raise HTTPException(400, "Informe valores válidos para cada abastecimento") from error
+        if not math.isfinite(fillup_price) or fillup_price < 0 or not math.isfinite(amount) or amount < 0:
+            raise HTTPException(400, "Os valores dos abastecimentos devem ser não negativos")
+        fillup_liters = round(amount / fillup_price, 2) if fillup_price > 0 else 0
+        fuelings.append({
+            "amount": amount,
+            "price_per_liter": fillup_price,
+            "fuel_type": fillup.get("fuel_type") or doc.get("fuel_type"),
+            "liters": fillup_liters,
+        })
+    doc["fuelings"] = fuelings
+    if fuelings:
+        doc["fuel_cost"] = round(sum(float(fillup["amount"]) for fillup in fuelings), 2)
+        doc["fuel_liters"] = round(sum(float(fillup["liters"]) for fillup in fuelings), 2)
+        purchased_liters = sum(float(fillup["liters"]) for fillup in fuelings)
+        if purchased_liters > 0:
+            doc["fuel_price_per_liter"] = round(doc["fuel_cost"] / purchased_liters, 2)
+    else:
+        doc["fuel_liters"] = estimated_liters
+        if price > 0:
+            doc["fuel_cost"] = round(estimated_liters * price, 2)
+    toll_records = doc.get("tolls") or []
+    if not isinstance(toll_records, list) or any(not isinstance(toll, dict) for toll in toll_records):
+        raise HTTPException(400, "A lista de pedágios é inválida")
+    if toll_records:
+        tolls = []
+        for toll in toll_records:
+            try:
+                amount = float(toll.get("amount") or 0)
+            except (TypeError, ValueError) as error:
+                raise HTTPException(400, "Informe um valor válido para cada pedágio") from error
+            if not math.isfinite(amount) or amount < 0:
+                raise HTTPException(400, "Os valores dos pedágios devem ser não negativos")
+            tolls.append({
+                "description": toll.get("description") or "",
+                "amount": amount,
+            })
+        doc["tolls"] = tolls
+        doc["toll_cost"] = round(sum(toll["amount"] for toll in tolls), 2)
     return doc
 
 async def _prepare_maintenance(doc: dict) -> dict:
@@ -251,6 +334,9 @@ class DashboardEventCreate(BaseModel):
     title: str = Field(min_length=1, max_length=120)
     description: str = Field(default="", max_length=1000)
     event_date: str
+
+class DashboardEventArchive(BaseModel):
+    archived: bool
 
 class UserRegister(BaseModel):
     email: EmailStr
@@ -435,6 +521,22 @@ class StockCountItem(BaseModel):
 class StockCountRequest(BaseModel):
     items: List[StockCountItem]
 
+class TripDestination(BaseModel):
+    destination_type: str
+    destination_id: str
+    name: Optional[str] = None
+    address: Optional[str] = None
+    distance_km: float = 0
+
+class TripFueling(BaseModel):
+    amount: float = Field(default=0, ge=0, allow_inf_nan=False)
+    price_per_liter: float = Field(default=0, ge=0, allow_inf_nan=False)
+    fuel_type: Optional[str] = None
+
+class TripToll(BaseModel):
+    description: Optional[str] = None
+    amount: float = Field(default=0, ge=0, allow_inf_nan=False)
+
 class Expense(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=new_id)
@@ -448,15 +550,20 @@ class Expense(BaseModel):
     supplier_id: Optional[str] = None
     destination_type: Optional[str] = None
     destination_id: Optional[str] = None
+    destinations: List[TripDestination] = []
     vehicle_id: Optional[str] = None
     vehicle_name: Optional[str] = None
     date: str = Field(default_factory=now_iso)
     # Viagem
     fuel_type: Optional[str] = None
+    fuelings: List[TripFueling] = []
     fuel_cost: float = 0
     toll_cost: float = 0
+    tolls: List[TripToll] = []
+    daily_allowance: float = 0
     avg_consumption: Optional[float] = None
     fuel_liters: float = 0
+    estimated_fuel_liters: float = 0
     fuel_price_per_liter: float = 0
     km: float = 0
     odometer_km: Optional[float] = None
@@ -2322,11 +2429,26 @@ async def create_dashboard_event(payload: DashboardEventCreate, user: dict = Dep
         "title": title,
         "description": payload.description.strip(),
         "event_date": payload.event_date,
+        "archived": False,
         "created_at": now_iso(),
         "created_by": user.get("name", ""),
     }
     await db.dashboard_events.insert_one(doc)
     return strip_mongo(doc)
+
+@api.patch("/dashboard/events/{event_id}")
+async def archive_dashboard_event(
+    event_id: str,
+    payload: DashboardEventArchive,
+    user: dict = Depends(require_admin),
+):
+    result = await db.dashboard_events.update_one(
+        {"id": event_id},
+        {"$set": {"archived": payload.archived}},
+    )
+    if result.matched_count == 0:
+        raise HTTPException(404, "Evento não encontrado")
+    return await db.dashboard_events.find_one({"id": event_id}, {"_id": 0})
 
 @api.delete("/dashboard/events/{event_id}")
 async def delete_dashboard_event(event_id: str, user: dict = Depends(require_admin)):
@@ -2334,6 +2456,62 @@ async def delete_dashboard_event(event_id: str, user: dict = Depends(require_adm
     if result.deleted_count == 0:
         raise HTTPException(404, "Evento não encontrado")
     return {"deleted": result.deleted_count}
+
+@api.get("/dashboard/pending")
+async def dashboard_pending(user: dict = Depends(get_current_user)):
+    today = datetime.now(ZoneInfo("America/Sao_Paulo")).date()
+    soon = today + timedelta(days=30)
+    events, orders, maintenance = await asyncio.gather(
+        db.dashboard_events.find({"archived": {"$ne": True}}, {"_id": 0}).to_list(500),
+        db.orders.find(
+            {"status": {"$nin": ["Entregue", "Retirado", "Cancelado"]}},
+            {"_id": 0, "id": 1, "number": 1, "status": 1, "customer_name": 1, "expected_date": 1},
+        ).to_list(1000),
+        db.expenses.find(
+            {"type": "MANUTENCAO", "next_review_date": {"$exists": True, "$nin": [None, ""]}},
+            {"_id": 0, "id": 1, "description": 1, "vehicle_model": 1, "plate": 1, "next_review_date": 1},
+        ).to_list(1000),
+    )
+    items = []
+    for event in events:
+        items.append({
+            "id": f"event:{event['id']}",
+            "type": "anotacao",
+            "title": event.get("title") or "Anotação",
+            "body": event.get("description") or "",
+            "date": event.get("event_date") or "",
+            "url": "/",
+        })
+    for order in orders:
+        expected_date = str(order.get("expected_date") or "")[:10]
+        is_scheduled = bool(expected_date and expected_date >= today.isoformat())
+        items.append({
+            "id": f"order:{order['id']}",
+            "type": "pedido",
+            "title": f"Pedido #{order.get('number', '')} {'agendado' if is_scheduled else 'em aberto'}",
+            "body": " · ".join(filter(None, (order.get("customer_name"), order.get("status")))),
+            "date": expected_date,
+            "url": "/pedidos",
+        })
+    for service in maintenance:
+        review_date = str(service.get("next_review_date") or "")[:10]
+        try:
+            parsed_date = datetime.strptime(review_date, "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        if parsed_date > soon:
+            continue
+        vehicle = " · ".join(filter(None, (service.get("vehicle_model"), service.get("plate"))))
+        items.append({
+            "id": f"maintenance:{service['id']}",
+            "type": "manutencao",
+            "title": "Manutenção vencida" if parsed_date < today else "Manutenção programada",
+            "body": " · ".join(filter(None, (service.get("description"), vehicle))),
+            "date": review_date,
+            "url": "/manutencao",
+        })
+    items.sort(key=lambda item: (item["date"] or "9999-12-31", item["type"], item["title"]))
+    return {"items": items}
 
 async def _delete_count(collection_name: str, query: Optional[dict] = None) -> int:
     result = await db[collection_name].delete_many(query or {})
@@ -2503,6 +2681,7 @@ async def _build_day_closure(day: str, user: dict, existing: Optional[dict] = No
                 float(expense.get("amount") or 0)
                 + float(expense.get("fuel_cost") or 0)
                 + float(expense.get("toll_cost") or 0)
+                + float(expense.get("daily_allowance") or 0)
                 for expense in day_expenses
             ),
         },
@@ -2831,7 +3010,7 @@ async def dashboard(user: dict = Depends(get_current_user), days: int = Query(7,
                 {"type": "MANUTENCAO", "next_review_date": {"$lte": soon}},
             ],
         }, {
-            "_id": 0, "amount": 1, "fuel_cost": 1, "toll_cost": 1, "date": 1,
+            "_id": 0, "amount": 1, "fuel_cost": 1, "toll_cost": 1, "daily_allowance": 1, "date": 1,
             "type": 1, "next_review_date": 1,
         }).to_list(5000),
     )
@@ -2857,7 +3036,10 @@ async def dashboard(user: dict = Depends(get_current_user), days: int = Query(7,
     com_month = sum(c.get("amount", 0) for c in coms if (c.get("created_at", "") or "").startswith(cur_month))
     # expenses month
     month_exps = [e for e in exps if (e.get("date", "") or "").startswith(cur_month)]
-    exp_month = sum(e.get("amount", 0) + e.get("fuel_cost", 0) + e.get("toll_cost", 0) for e in month_exps)
+    exp_month = sum(
+        e.get("amount", 0) + e.get("fuel_cost", 0) + e.get("toll_cost", 0) + e.get("daily_allowance", 0)
+        for e in month_exps
+    )
     insumos_month = sum(e.get("amount", 0) for e in month_exps if e.get("type") == "INSUMO")
     manut_month = sum(e.get("amount", 0) for e in month_exps if e.get("type") == "MANUTENCAO")
     manut_alerts = sum(1 for e in exps if e.get("type") == "MANUTENCAO" and e.get("next_review_date") and e["next_review_date"][:10] <= soon)

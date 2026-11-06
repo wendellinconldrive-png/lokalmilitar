@@ -218,6 +218,8 @@ def _timed_event(source_key, summary, description, event_date, recurrence=None):
 def build_calendar_events(dashboard_events, expenses, orders):
     result = {}
     for event in dashboard_events:
+        if event.get("archived") is True:
+            continue
         event_date = local_date(event.get("event_date"))
         if not event_date:
             continue
@@ -270,6 +272,8 @@ def build_due_notifications(dashboard_events, expenses, orders, today=None):
     today = today or datetime.now(LOCAL_TZ).date()
     notifications = []
     for event in dashboard_events:
+        if event.get("archived") is True:
+            continue
         event_date = local_date(event.get("event_date"))
         if not event_date:
             continue

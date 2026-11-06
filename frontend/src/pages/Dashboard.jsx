@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { api, formatBRL } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
-import { Shirt, Footprints, Package, Award, ClipboardList, Clock, Users, CircleDollarSign, AlertTriangle, Scissors, Car, Shield, Star, ClipboardCheck, Printer, CalendarDays, CalendarPlus, Download, Trash2 } from "lucide-react";
+import { Shirt, Footprints, Package, Award, ClipboardList, Clock, Users, CircleDollarSign, AlertTriangle, Scissors, Car, Shield, Star, ClipboardCheck, Printer, CalendarDays, CalendarPlus, Download, Archive, ArchiveRestore } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, CartesianGrid } from "recharts";
 import { DASHBOARD_KPIS, getVisibleDashboardGridPositions } from "@/pages/dashboardPreferences";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -74,7 +74,7 @@ const printDayClosure = (report, stockCheckRows = []) => {
   ]);
   const expenseRows = report.expenses.map((expense) => [
     expense.type, expense.description, expense.km ?? "", expense.odometer_km ?? "",
-    formatBRL(Number(expense.amount || 0) + Number(expense.fuel_cost || 0) + Number(expense.toll_cost || 0)),
+    formatBRL(Number(expense.amount || 0) + Number(expense.fuel_cost || 0) + Number(expense.toll_cost || 0) + Number(expense.daily_allowance || 0)),
   ]);
 
   printWindow.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Fechamento do dia ${escapeHtml(report.date)}</title>
@@ -121,6 +121,7 @@ export default function Dashboard() {
   const [eventDialogOpen, setEventDialogOpen] = useState(false);
   const [eventTitle, setEventTitle] = useState("");
   const [eventDescription, setEventDescription] = useState("");
+  const [showArchivedEvents, setShowArchivedEvents] = useState(false);
   const [eventDate, setEventDate] = useState(localDateValue);
   const { chart_days: chartDays, chart_type: chartType, order, visibility, grid_positions: configuredGridPositions } = dashboardPreferences;
   const showAnnouncements = dashboardPreferences.show_announcements !== false;
@@ -292,14 +293,13 @@ export default function Dashboard() {
     }
   });
 
-  const deleteEvent = async (eventId) => {
-    if (!window.confirm("Excluir este evento do quadro de avisos?")) return;
+  const archiveEvent = async (event) => {
     try {
-      await api.delete(`/dashboard/events/${eventId}`);
-      setEvents((current) => current.filter((event) => event.id !== eventId));
-      toast.success("Evento removido");
+      const { data: updatedEvent } = await api.patch(`/dashboard/events/${event.id}`, { archived: !event.archived });
+      setEvents((current) => current.map((item) => item.id === event.id ? updatedEvent : item));
+      toast.success(event.archived ? "Anotação restaurada" : "Anotação arquivada");
     } catch (eventError) {
-      toast.error(eventError.response?.data?.detail || "Não foi possível remover o evento");
+      toast.error(eventError.response?.data?.detail || "Não foi possível arquivar a anotação");
     }
   };
 
@@ -441,6 +441,34 @@ export default function Dashboard() {
     configuredGridPositions,
     visibility,
   );
+  const visibleEvents = events.filter((event) => Boolean(event.archived) === showArchivedEvents);
+  const renderAnnouncements = () => (
+    <section key="announcements" className="lm-card overflow-hidden col-span-full" style={{ background: colors.card_background, color: colors.card_text, borderColor: colors.card_border }} data-testid="dashboard-announcements">
+      <DashboardCardHeader icon={CalendarDays} iconColor={colors.chart_accent} textColor={textColor}>Quadro de avisos</DashboardCardHeader>
+      <div className="p-4 space-y-3">
+        <button className="text-xs underline" onClick={() => setShowArchivedEvents((shown) => !shown)} data-testid="toggle-archived-events">
+          {showArchivedEvents ? "Ver anotações ativas" : `Ver anotações arquivadas (${events.filter((event) => event.archived).length})`}
+        </button>
+        {eventsLoading ? <p className="text-sm text-neutral-500">Carregando eventos...</p> : visibleEvents.length ? (
+          visibleEvents.map((event) => (
+            <article key={event.id} className="flex items-start justify-between gap-3 border-b pb-3 last:border-0 last:pb-0" data-testid={`dashboard-event-${event.id}`}>
+              <div>
+                <h3 className="font-semibold">{event.title}{event.archived && <span className="ml-2 text-xs text-neutral-500">(arquivada)</span>}</h3>
+                <p className="text-xs text-neutral-500">
+                  {new Date(`${event.event_date}T00:00:00`).toLocaleDateString("pt-BR")}
+                  {event.created_by ? ` · Registrado por ${event.created_by}` : ""}
+                </p>
+                {event.description && <p className="mt-1 text-sm whitespace-pre-wrap">{event.description}</p>}
+              </div>
+              {isAdmin && <button className="text-neutral-700 p-1" onClick={() => archiveEvent(event)} aria-label={`${event.archived ? "Restaurar" : "Arquivar"} anotação ${event.title}`} title={event.archived ? "Restaurar anotação" : "Arquivar como executada"}>
+                {event.archived ? <ArchiveRestore size={15} /> : <Archive size={15} />}
+              </button>}
+            </article>
+          ))
+        ) : <p className="text-sm text-neutral-500">{showArchivedEvents ? "Nenhuma anotação arquivada." : "Nenhuma anotação registrada."}</p>}
+      </div>
+    </section>
+  );
   const renderItem = (id) => {
     if (id.startsWith("category:")) {
       const categoryName = id.slice("category:".length);
@@ -450,30 +478,7 @@ export default function Dashboard() {
     if (id === "chart") {
       if (visibility.chart === false) {
         if (!showAnnouncements) return null;
-        return (
-          <section key="announcements" className="lm-card overflow-hidden col-span-full" style={{ background: colors.card_background, color: colors.card_text, borderColor: colors.card_border }} data-testid="dashboard-announcements">
-            <DashboardCardHeader icon={CalendarDays} iconColor={colors.chart_accent} textColor={textColor}>Quadro de avisos</DashboardCardHeader>
-            <div className="p-4 space-y-3">
-              {eventsLoading ? <p className="text-sm text-neutral-500">Carregando eventos...</p> : events.length ? (
-                events.map((event) => (
-                  <article key={event.id} className="flex items-start justify-between gap-3 border-b pb-3 last:border-0 last:pb-0" data-testid={`dashboard-event-${event.id}`}>
-                    <div>
-                      <h3 className="font-semibold">{event.title}</h3>
-                      <p className="text-xs text-neutral-500">
-                        {new Date(`${event.event_date}T00:00:00`).toLocaleDateString("pt-BR")}
-                        {event.created_by ? ` · Registrado por ${event.created_by}` : ""}
-                      </p>
-                      {event.description && <p className="mt-1 text-sm whitespace-pre-wrap">{event.description}</p>}
-                    </div>
-                    {isAdmin && <button className="text-red-700 p-1" onClick={() => deleteEvent(event.id)} aria-label={`Excluir evento ${event.title}`} title="Excluir evento">
-                      <Trash2 size={15} />
-                    </button>}
-                  </article>
-                ))
-              ) : <p className="text-sm text-neutral-500">Nenhum evento registrado.</p>}
-            </div>
-          </section>
-        );
+        return renderAnnouncements();
       }
       return (
         <section key={id} className="lm-card overflow-hidden col-span-full" style={{ background: colors.card_background, color: colors.card_text, borderColor: colors.card_border }}>
@@ -531,6 +536,7 @@ export default function Dashboard() {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {visibleItems.map(renderItem)}
       </div>
+      {showAnnouncements && visibility.chart !== false && renderAnnouncements()}
       <Dialog open={eventDialogOpen} onOpenChange={setEventDialogOpen}>
         <DialogContent data-testid="dashboard-event-dialog">
           <DialogHeader>
@@ -771,7 +777,7 @@ export default function Dashboard() {
                 <h3 className="font-head mb-2">Despesas, insumos e viagens</h3>
                 <div className="lm-table-wrap overflow-x-auto"><table className="lm-table">
                   <thead><tr><th>Tipo</th><th>Descrição</th><th>KM</th><th>KM no painel</th><th>Valor</th></tr></thead>
-                  <tbody>{closureReport.expenses.map((expense) => <tr key={expense.id}><td>{expense.type}</td><td>{expense.description}</td><td>{expense.km ?? "—"}</td><td>{expense.odometer_km ?? "—"}</td><td>{formatBRL(Number(expense.amount || 0) + Number(expense.fuel_cost || 0) + Number(expense.toll_cost || 0))}</td></tr>)}
+                  <tbody>{closureReport.expenses.map((expense) => <tr key={expense.id}><td>{expense.type}</td><td>{expense.description}</td><td>{expense.km ?? "—"}</td><td>{expense.odometer_km ?? "—"}</td><td>{formatBRL(Number(expense.amount || 0) + Number(expense.fuel_cost || 0) + Number(expense.toll_cost || 0) + Number(expense.daily_allowance || 0))}</td></tr>)}
                     {closureReport.expenses.length === 0 && <tr><td colSpan={5} className="text-center py-3">Sem despesas no dia.</td></tr>}</tbody>
                 </table></div>
               </section>
