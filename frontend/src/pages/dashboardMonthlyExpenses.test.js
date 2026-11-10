@@ -1,4 +1,9 @@
-import { filterMonthlyExpenses, isValidExpenseMonth, summarizeExpenses } from "./dashboardMonthlyExpenses";
+import {
+  buildMonthlyExpenseDetails,
+  filterMonthlyExpenses,
+  isValidExpenseMonth,
+  summarizeExpenses,
+} from "./dashboardMonthlyExpenses";
 
 const expenses = [
   { id: "supply", type: "INSUMO", date: "2026-03-05", amount: 40 },
@@ -44,5 +49,69 @@ describe("monthly dashboard expense reports", () => {
       deliveryOther: 20,
       total: 240,
     });
+  });
+
+  it("lists each fuel fill-up and toll separately with its recorded amount", () => {
+    const details = buildMonthlyExpenseDetails([{
+      id: "trip-details",
+      type: "VIAGEM",
+      description: "Entrega centro",
+      vehicle_id: "ford",
+      fuel_cost: 100,
+      toll_cost: 18,
+      fuelings: [
+        { fuel_type: "Gasolina", amount: 70, quantity: 10, unit: "L", price_per_unit: 7 },
+        { fuel_type: "Etanol", amount: 30, quantity: 10, unit: "L", price_per_unit: 3 },
+      ],
+      tolls: [
+        { description: "Praça A", amount: 10 },
+        { description: "Praça B", amount: 8 },
+      ],
+      daily_allowance: 20,
+      amount: 5,
+    }], [{ id: "ford", name: "Ford", plate: "ABC-1234" }]);
+
+    expect(details.map(({ category }) => category)).toEqual([
+      "Combustível",
+      "Combustível",
+      "Pedágio",
+      "Pedágio",
+      "Diária",
+      "Outros custos da entrega",
+    ]);
+    expect(details.map(({ amount }) => amount)).toEqual([70, 30, 10, 8, 20, 5]);
+    expect(details[0].vehicle).toBe("Ford · ABC-1234");
+    expect(details[0].detail).toContain("10 L");
+    expect(details[2].description).toContain("Praça A");
+    expect(details.reduce((sum, item) => sum + item.amount, 0)).toBe(143);
+    expect(summarizeExpenses([{
+      type: "VIAGEM",
+      fuel_cost: 0,
+      toll_cost: 0,
+      fuelings: [
+        { amount: 70 },
+        { amount: 30 },
+      ],
+      tolls: [
+        { amount: 10 },
+        { amount: 8 },
+      ],
+      daily_allowance: 20,
+      amount: 5,
+    }]).total).toBe(143);
+  });
+
+  it("keeps supply and maintenance records individually itemized", () => {
+    const details = buildMonthlyExpenseDetails([
+      { id: "supply", type: "INSUMO", description: "Linha", amount: 40, quantity: 4, unit: "rolos", remaining_quantity: 2 },
+      { id: "service", type: "MANUTENCAO", description: "Troca de óleo", amount: 100, km: 2000, next_review_date: "2026-09-10" },
+    ]);
+
+    expect(details.map(({ description, amount }) => [description, amount])).toEqual([
+      ["Linha", 40],
+      ["Troca de óleo", 100],
+    ]);
+    expect(details[0].detail).toContain("Comprado: 4 rolos");
+    expect(details[1].detail).toContain("2000 km");
   });
 });

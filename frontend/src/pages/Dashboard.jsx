@@ -6,7 +6,12 @@ import { toast } from "sonner";
 import { Shirt, Footprints, Package, Award, ClipboardList, Clock, Users, CircleDollarSign, AlertTriangle, Scissors, Car, Shield, Star, ClipboardCheck, Printer, CalendarDays, CalendarPlus, Download, Archive, ArchiveRestore } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, CartesianGrid } from "recharts";
 import { DASHBOARD_KPIS, getVisibleDashboardGridPositions } from "@/pages/dashboardPreferences";
-import { filterMonthlyExpenses, isValidExpenseMonth, summarizeExpenses } from "@/pages/dashboardMonthlyExpenses";
+import {
+  buildMonthlyExpenseDetails,
+  filterMonthlyExpenses,
+  isValidExpenseMonth,
+  summarizeExpenses,
+} from "@/pages/dashboardMonthlyExpenses";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import useSubmitLock from "@/hooks/useSubmitLock";
@@ -93,13 +98,6 @@ const printDayClosure = (report, stockCheckRows = []) => {
   return true;
 };
 
-const getExpenseVehicleName = (expense, vehicles) => {
-  const vehicle = vehicles.find((item) => item.id === expense.vehicle_id);
-  return vehicle
-    ? [vehicle.name, vehicle.model, vehicle.plate].filter(Boolean).join(" · ")
-    : [expense.vehicle_name, expense.vehicle_model, expense.plate].filter(Boolean).join(" · ") || "—";
-};
-
 const formatExpenseDate = (value) => {
   const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(value || ""));
   return match ? `${match[3]}/${match[2]}/${match[1]}` : "—";
@@ -111,33 +109,21 @@ const printMonthlyExpenseReport = (expenses, summary, month, vehicleLabel, vehic
     toast.error("Permita pop-ups para gerar o PDF");
     return;
   }
-  const rows = expenses.map((expense) => {
-    const amount = Number(expense.amount || 0);
-    const fuel = Number(expense.fuel_cost || 0);
-    const toll = Number(expense.toll_cost || 0);
-    const dailyAllowance = Number(expense.daily_allowance || 0);
-    const typeLabel = expense.type === "INSUMO" ? "Insumo"
-      : expense.type === "MANUTENCAO" ? "Manutenção"
-        : expense.type === "VIAGEM" ? "Entrega/viagem" : expense.type;
-    return [
-      formatExpenseDate(expense.date),
-      typeLabel,
-      expense.description,
-      getExpenseVehicleName(expense, vehicles),
-      formatBRL(amount),
-      formatBRL(fuel),
-      formatBRL(toll),
-      formatBRL(dailyAllowance),
-      formatBRL(amount + fuel + toll + dailyAllowance),
-    ];
-  });
+  const rows = buildMonthlyExpenseDetails(expenses, vehicles).map((detail) => [
+    formatExpenseDate(detail.date),
+    detail.category,
+    detail.description,
+    detail.vehicle,
+    detail.detail,
+    formatBRL(detail.amount),
+  ]);
   const table = `
-    <table><thead><tr>${["Data", "Categoria", "Descrição", "Veículo", "Valor base", "Combustível", "Pedágios", "Diárias", "Total"].map((header) => `<th>${escapeHtml(header)}</th>`).join("")}</tr></thead>
-    <tbody>${rows.length ? rows.map((row) => `<tr>${row.map((cell) => `<td>${escapeHtml(cell)}</td>`).join("")}</tr>`).join("") : '<tr><td colspan="9">Nenhuma despesa encontrada neste período.</td></tr>'}</tbody></table>`;
+    <table><thead><tr>${["Data", "Categoria", "Descrição / item", "Veículo", "Detalhes", "Valor"].map((header) => `<th>${escapeHtml(header)}</th>`).join("")}</tr></thead>
+    <tbody>${rows.length ? rows.map((row) => `<tr>${row.map((cell) => `<td>${escapeHtml(cell)}</td>`).join("")}</tr>`).join("") : '<tr><td colspan="6">Nenhuma despesa encontrada neste período.</td></tr>'}</tbody></table>`;
   const monthLabel = new Date(`${month}-01T00:00:00`).toLocaleDateString("pt-BR", { month: "long", year: "numeric" });
 
   printWindow.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Despesas do mês ${escapeHtml(monthLabel)}</title>
-    <style>body{font:12px Arial,sans-serif;padding:24px;color:#222}h1,h2{color:#354017}h1{font-size:20px}table{width:100%;border-collapse:collapse;margin-top:16px}th,td{border:1px solid #aaa;padding:6px;text-align:left}th{background:#eee}.summary{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:16px}.summary div{border:1px solid #aaa;padding:8px}.total{font-weight:bold}@media print{body{padding:0}}</style>
+    <style>body{font:12px Arial,sans-serif;padding:24px;color:#222}h1,h2{color:#354017}h1{font-size:20px}table{width:100%;border-collapse:collapse;margin-top:16px}th,td{border:1px solid #aaa;padding:6px;text-align:left}th{background:#eee}.summary{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:16px}.summary div{border:1px solid #aaa;padding:8px}.total{font-weight:bold}.grand-total{margin-top:24px;padding:14px;border:2px solid #354017;text-align:right;font-size:18px;font-weight:bold}@media print{body{padding:0}}</style>
     </head><body><h1>LOKAL MILITAR — Relatório mensal de gastos</h1>
     <p>Período: ${escapeHtml(monthLabel)} · Veículo: ${escapeHtml(vehicleLabel)} · ${expenses.length} registro(s)</p>
     <div class="summary">
@@ -147,7 +133,8 @@ const printMonthlyExpenseReport = (expenses, summary, month, vehicleLabel, vehic
       <div>Pedágios: ${escapeHtml(formatBRL(summary.tolls))}</div>
       <div>Diárias e outros custos de entrega: ${escapeHtml(formatBRL(summary.deliveryOther))}</div>
       <div class="total">Total geral: ${escapeHtml(formatBRL(summary.total))}</div>
-    </div>${table}</body></html>`);
+    </div>${table}
+    <div class="grand-total">TOTAL GASTO NO MÊS: ${escapeHtml(formatBRL(summary.total))}</div></body></html>`);
   printWindow.document.close();
   printWindow.setTimeout(() => printWindow.print(), 300);
 };
@@ -536,6 +523,7 @@ export default function Dashboard() {
   );
   const visibleEvents = events.filter((event) => Boolean(event.archived) === showArchivedEvents);
   const monthlyExpenseRows = filterMonthlyExpenses(monthlyExpenses, expenseReportMonth, expenseReportVehicleId);
+  const monthlyExpenseDetails = buildMonthlyExpenseDetails(monthlyExpenseRows, monthlyExpenseVehicles);
   const monthlyExpenseSummary = summarizeExpenses(monthlyExpenseRows);
   const selectedExpenseVehicle = monthlyExpenseVehicles.find((vehicle) => vehicle.id === expenseReportVehicleId);
   const expenseReportVehicleLabel = selectedExpenseVehicle
@@ -696,27 +684,20 @@ export default function Dashboard() {
                 <p className="text-sm text-neutral-600">{expenseReportMonthLabel} · {expenseReportVehicleLabel} · {monthlyExpenseRows.length} registro(s)</p>
                 <div className="lm-table-wrap overflow-x-auto">
                   <table className="lm-table">
-                    <thead><tr><th>Data</th><th>Tipo</th><th>Descrição</th><th>Veículo</th><th>Valor base</th><th>Combustível</th><th>Pedágios</th><th>Diárias</th><th>Total</th></tr></thead>
-                    <tbody>{monthlyExpenseRows.map((expense) => {
-                      const amount = Number(expense.amount || 0);
-                      const fuel = Number(expense.fuel_cost || 0);
-                      const toll = Number(expense.toll_cost || 0);
-                      const dailyAllowance = Number(expense.daily_allowance || 0);
-                      const typeLabel = expense.type === "INSUMO" ? "Insumo"
-                        : expense.type === "MANUTENCAO" ? "Manutenção"
-                          : expense.type === "VIAGEM" ? "Entrega/viagem" : expense.type;
-                      return (
-                        <tr key={expense.id}>
-                          <td>{formatExpenseDate(expense.date)}</td><td>{typeLabel}</td><td>{expense.description}</td>
-                          <td>{getExpenseVehicleName(expense, monthlyExpenseVehicles)}</td>
-                          <td>{formatBRL(amount)}</td><td>{formatBRL(fuel)}</td><td>{formatBRL(toll)}</td><td>{formatBRL(dailyAllowance)}</td>
-                          <td>{formatBRL(amount + fuel + toll + dailyAllowance)}</td>
-                        </tr>
-                      );
-                    })}
-                    {!monthlyExpensesError && monthlyExpenseRows.length === 0 && <tr><td colSpan={9} className="text-center py-3">Nenhum gasto registrado neste mês e filtro.</td></tr>}
+                    <thead><tr><th>Data</th><th>Tipo</th><th>Descrição / item</th><th>Veículo</th><th>Detalhes</th><th>Valor</th></tr></thead>
+                    <tbody>{monthlyExpenseDetails.map((detail, index) => (
+                      <tr key={`${detail.id}-${index}`}>
+                        <td>{formatExpenseDate(detail.date)}</td><td>{detail.category}</td><td>{detail.description}</td>
+                        <td>{detail.vehicle}</td><td>{detail.detail || "—"}</td><td>{formatBRL(detail.amount)}</td>
+                      </tr>
+                    ))}
+                    {!monthlyExpensesError && monthlyExpenseDetails.length === 0 && <tr><td colSpan={6} className="text-center py-3">Nenhum gasto registrado neste mês e filtro.</td></tr>}
                     </tbody>
                   </table>
+                </div>
+                <div className="border-2 border-[var(--olive)] p-4 text-right" data-testid="monthly-expenses-grand-total">
+                  <span className="text-sm font-bold">TOTAL GASTO NO MÊS: </span>
+                  <span className="font-head text-xl font-bold">{formatBRL(monthlyExpenseSummary.total)}</span>
                 </div>
               </>
             )}
