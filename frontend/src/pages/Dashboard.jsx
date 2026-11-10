@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { Shirt, Footprints, Package, Award, ClipboardList, Clock, Users, CircleDollarSign, AlertTriangle, Scissors, Car, Shield, Star, ClipboardCheck, Printer, CalendarDays, CalendarPlus, Download, Archive, ArchiveRestore } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, CartesianGrid } from "recharts";
 import { DASHBOARD_KPIS, getVisibleDashboardGridPositions } from "@/pages/dashboardPreferences";
+import { filterMonthlyExpenses, isValidExpenseMonth, summarizeExpenses } from "@/pages/dashboardMonthlyExpenses";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import useSubmitLock from "@/hooks/useSubmitLock";
@@ -92,6 +93,65 @@ const printDayClosure = (report, stockCheckRows = []) => {
   return true;
 };
 
+const getExpenseVehicleName = (expense, vehicles) => {
+  const vehicle = vehicles.find((item) => item.id === expense.vehicle_id);
+  return vehicle
+    ? [vehicle.name, vehicle.model, vehicle.plate].filter(Boolean).join(" · ")
+    : [expense.vehicle_name, expense.vehicle_model, expense.plate].filter(Boolean).join(" · ") || "—";
+};
+
+const formatExpenseDate = (value) => {
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(value || ""));
+  return match ? `${match[3]}/${match[2]}/${match[1]}` : "—";
+};
+
+const printMonthlyExpenseReport = (expenses, summary, month, vehicleLabel, vehicles) => {
+  const printWindow = window.open("", "_blank");
+  if (!printWindow) {
+    toast.error("Permita pop-ups para gerar o PDF");
+    return;
+  }
+  const rows = expenses.map((expense) => {
+    const amount = Number(expense.amount || 0);
+    const fuel = Number(expense.fuel_cost || 0);
+    const toll = Number(expense.toll_cost || 0);
+    const dailyAllowance = Number(expense.daily_allowance || 0);
+    const typeLabel = expense.type === "INSUMO" ? "Insumo"
+      : expense.type === "MANUTENCAO" ? "Manutenção"
+        : expense.type === "VIAGEM" ? "Entrega/viagem" : expense.type;
+    return [
+      formatExpenseDate(expense.date),
+      typeLabel,
+      expense.description,
+      getExpenseVehicleName(expense, vehicles),
+      formatBRL(amount),
+      formatBRL(fuel),
+      formatBRL(toll),
+      formatBRL(dailyAllowance),
+      formatBRL(amount + fuel + toll + dailyAllowance),
+    ];
+  });
+  const table = `
+    <table><thead><tr>${["Data", "Categoria", "Descrição", "Veículo", "Valor base", "Combustível", "Pedágios", "Diárias", "Total"].map((header) => `<th>${escapeHtml(header)}</th>`).join("")}</tr></thead>
+    <tbody>${rows.length ? rows.map((row) => `<tr>${row.map((cell) => `<td>${escapeHtml(cell)}</td>`).join("")}</tr>`).join("") : '<tr><td colspan="9">Nenhuma despesa encontrada neste período.</td></tr>'}</tbody></table>`;
+  const monthLabel = new Date(`${month}-01T00:00:00`).toLocaleDateString("pt-BR", { month: "long", year: "numeric" });
+
+  printWindow.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Despesas do mês ${escapeHtml(monthLabel)}</title>
+    <style>body{font:12px Arial,sans-serif;padding:24px;color:#222}h1,h2{color:#354017}h1{font-size:20px}table{width:100%;border-collapse:collapse;margin-top:16px}th,td{border:1px solid #aaa;padding:6px;text-align:left}th{background:#eee}.summary{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:16px}.summary div{border:1px solid #aaa;padding:8px}.total{font-weight:bold}@media print{body{padding:0}}</style>
+    </head><body><h1>LOKAL MILITAR — Relatório mensal de gastos</h1>
+    <p>Período: ${escapeHtml(monthLabel)} · Veículo: ${escapeHtml(vehicleLabel)} · ${expenses.length} registro(s)</p>
+    <div class="summary">
+      <div>Insumos: ${escapeHtml(formatBRL(summary.supplies))}</div>
+      <div>Manutenção: ${escapeHtml(formatBRL(summary.maintenance))}</div>
+      <div>Combustível: ${escapeHtml(formatBRL(summary.fuel))}</div>
+      <div>Pedágios: ${escapeHtml(formatBRL(summary.tolls))}</div>
+      <div>Diárias e outros custos de entrega: ${escapeHtml(formatBRL(summary.deliveryOther))}</div>
+      <div class="total">Total geral: ${escapeHtml(formatBRL(summary.total))}</div>
+    </div>${table}</body></html>`);
+  printWindow.document.close();
+  printWindow.setTimeout(() => printWindow.print(), 300);
+};
+
 export default function Dashboard() {
   const { run: withSubmitLock, isPending } = useSubmitLock();
   const nav = useNavigate();
@@ -118,6 +178,13 @@ export default function Dashboard() {
   const [downloadingBackup, setDownloadingBackup] = useState(false);
   const [events, setEvents] = useState([]);
   const [eventsLoading, setEventsLoading] = useState(true);
+  const [monthlyExpensesOpen, setMonthlyExpensesOpen] = useState(false);
+  const [monthlyExpensesLoading, setMonthlyExpensesLoading] = useState(false);
+  const [monthlyExpensesError, setMonthlyExpensesError] = useState("");
+  const [monthlyExpenses, setMonthlyExpenses] = useState([]);
+  const [monthlyExpenseVehicles, setMonthlyExpenseVehicles] = useState([]);
+  const [expenseReportMonth, setExpenseReportMonth] = useState(() => localDateValue().slice(0, 7));
+  const [expenseReportVehicleId, setExpenseReportVehicleId] = useState("");
   const [eventDialogOpen, setEventDialogOpen] = useState(false);
   const [eventTitle, setEventTitle] = useState("");
   const [eventDescription, setEventDescription] = useState("");
@@ -303,6 +370,32 @@ export default function Dashboard() {
     }
   };
 
+  const loadMonthlyExpenses = async () => {
+    setMonthlyExpensesLoading(true);
+    setMonthlyExpensesError("");
+    try {
+      const [expensesResponse, vehiclesResponse] = await Promise.all([
+        api.get("/expenses"),
+        api.get("/vehicles"),
+      ]);
+      setMonthlyExpenses(expensesResponse.data);
+      setMonthlyExpenseVehicles(vehiclesResponse.data);
+    } catch (reportError) {
+      const message = reportError.response?.data?.detail || "Não foi possível carregar as despesas do mês";
+      setMonthlyExpenses([]);
+      setMonthlyExpenseVehicles([]);
+      setMonthlyExpensesError(message);
+      toast.error(message);
+    } finally {
+      setMonthlyExpensesLoading(false);
+    }
+  };
+
+  const openMonthlyExpenses = () => {
+    setMonthlyExpensesOpen(true);
+    loadMonthlyExpenses();
+  };
+
   const openCloseDayDialog = async () => {
     try {
       const { data: availableVehicles } = await api.get("/vehicles");
@@ -442,6 +535,15 @@ export default function Dashboard() {
     visibility,
   );
   const visibleEvents = events.filter((event) => Boolean(event.archived) === showArchivedEvents);
+  const monthlyExpenseRows = filterMonthlyExpenses(monthlyExpenses, expenseReportMonth, expenseReportVehicleId);
+  const monthlyExpenseSummary = summarizeExpenses(monthlyExpenseRows);
+  const selectedExpenseVehicle = monthlyExpenseVehicles.find((vehicle) => vehicle.id === expenseReportVehicleId);
+  const expenseReportVehicleLabel = selectedExpenseVehicle
+    ? [selectedExpenseVehicle.name, selectedExpenseVehicle.model, selectedExpenseVehicle.plate].filter(Boolean).join(" · ")
+    : "Todos os veículos";
+  const expenseReportMonthLabel = isValidExpenseMonth(expenseReportMonth)
+    ? new Date(`${expenseReportMonth}-01T00:00:00`).toLocaleDateString("pt-BR", { month: "long", year: "numeric" })
+    : "Selecione um mês válido";
   const renderAnnouncements = () => (
     <section key="announcements" className="lm-card overflow-hidden col-span-full" style={{ background: colors.card_background, color: colors.card_text, borderColor: colors.card_border }} data-testid="dashboard-announcements">
       <DashboardCardHeader icon={CalendarDays} iconColor={colors.chart_accent} textColor={textColor}>Quadro de avisos</DashboardCardHeader>
@@ -514,6 +616,9 @@ export default function Dashboard() {
     <div className="space-y-4" style={{ color: colors.card_text }} data-testid="dashboard-page">
       <div className="lm-page-head flex items-end justify-between gap-3 flex-wrap">
         <div><h1 style={{ color: "var(--title-color)" }}>Dashboard</h1><p>Visão geral da operação · {new Date().toLocaleDateString("pt-BR")}</p></div>
+        <button className="lm-btn lm-btn-dark" onClick={openMonthlyExpenses} data-testid="view-monthly-expenses">
+          <Printer size={16} />GASTOS DO MÊS
+        </button>
         {isAdmin && (
           <div className="flex flex-wrap gap-2">
             <button className="lm-btn lm-btn-dark" onClick={openClosureHistory} disabled={loadingClosureHistory} data-testid="view-day-closures">
@@ -537,6 +642,90 @@ export default function Dashboard() {
         {visibleItems.map(renderItem)}
       </div>
       {showAnnouncements && visibility.chart !== false && renderAnnouncements()}
+      <Dialog open={monthlyExpensesOpen} onOpenChange={setMonthlyExpensesOpen}>
+        <DialogContent className="max-w-6xl max-h-[90vh] overflow-y-auto" data-testid="monthly-expenses-report">
+          <DialogHeader>
+            <DialogTitle className="font-head">Relatório mensal de gastos</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-end gap-3">
+              <label className="text-sm">
+                Mês
+                <Input type="month" value={expenseReportMonth} onChange={(event) => setExpenseReportMonth(event.target.value)} data-testid="monthly-expenses-month" />
+              </label>
+              <label className="text-sm">
+                Veículo
+                <select className="lm-input mt-1 min-w-56" value={expenseReportVehicleId} onChange={(event) => setExpenseReportVehicleId(event.target.value)} data-testid="monthly-expenses-vehicle">
+                  <option value="">Todos os veículos</option>
+                  {monthlyExpenseVehicles.map((vehicle) => (
+                    <option key={vehicle.id} value={vehicle.id}>{[vehicle.name, vehicle.model, vehicle.plate].filter(Boolean).join(" · ")}</option>
+                  ))}
+                </select>
+              </label>
+              <button className="lm-btn lm-btn-dark" onClick={loadMonthlyExpenses} disabled={monthlyExpensesLoading} data-testid="refresh-monthly-expenses">
+                {monthlyExpensesLoading ? "CARREGANDO..." : "ATUALIZAR"}
+              </button>
+              <button
+                className="lm-btn lm-btn-olive"
+                onClick={() => printMonthlyExpenseReport(monthlyExpenseRows, monthlyExpenseSummary, expenseReportMonth, expenseReportVehicleLabel, monthlyExpenseVehicles)}
+                disabled={monthlyExpensesLoading || Boolean(monthlyExpensesError) || !isValidExpenseMonth(expenseReportMonth)}
+                data-testid="print-monthly-expenses"
+              >
+                <Printer size={16} />GERAR PDF
+              </button>
+            </div>
+            {expenseReportVehicleId && <p className="text-xs text-neutral-500">Os insumos sem veículo vinculado também são incluídos no filtro por veículo.</p>}
+            {monthlyExpensesError && <p className="text-sm text-red-700" role="alert">{monthlyExpensesError}</p>}
+            {monthlyExpensesLoading ? <p className="text-sm text-neutral-500">Carregando despesas...</p> : monthlyExpensesError ? null : (
+              <>
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2" data-testid="monthly-expenses-totals">
+                  {[
+                    ["Insumos", monthlyExpenseSummary.supplies],
+                    ["Manutenção", monthlyExpenseSummary.maintenance],
+                    ["Combustível", monthlyExpenseSummary.fuel],
+                    ["Pedágios", monthlyExpenseSummary.tolls],
+                    ["Entregas · diárias/outros", monthlyExpenseSummary.deliveryOther],
+                    ["Total geral", monthlyExpenseSummary.total],
+                  ].map(([label, amount]) => (
+                    <div className="lokal-panel p-3" key={label}>
+                      <div className="text-xs text-neutral-500">{label}</div>
+                      <div className="font-head text-sm font-bold">{formatBRL(amount)}</div>
+                    </div>
+                  ))}
+                </div>
+                <p className="text-sm text-neutral-600">{expenseReportMonthLabel} · {expenseReportVehicleLabel} · {monthlyExpenseRows.length} registro(s)</p>
+                <div className="lm-table-wrap overflow-x-auto">
+                  <table className="lm-table">
+                    <thead><tr><th>Data</th><th>Tipo</th><th>Descrição</th><th>Veículo</th><th>Valor base</th><th>Combustível</th><th>Pedágios</th><th>Diárias</th><th>Total</th></tr></thead>
+                    <tbody>{monthlyExpenseRows.map((expense) => {
+                      const amount = Number(expense.amount || 0);
+                      const fuel = Number(expense.fuel_cost || 0);
+                      const toll = Number(expense.toll_cost || 0);
+                      const dailyAllowance = Number(expense.daily_allowance || 0);
+                      const typeLabel = expense.type === "INSUMO" ? "Insumo"
+                        : expense.type === "MANUTENCAO" ? "Manutenção"
+                          : expense.type === "VIAGEM" ? "Entrega/viagem" : expense.type;
+                      return (
+                        <tr key={expense.id}>
+                          <td>{formatExpenseDate(expense.date)}</td><td>{typeLabel}</td><td>{expense.description}</td>
+                          <td>{getExpenseVehicleName(expense, monthlyExpenseVehicles)}</td>
+                          <td>{formatBRL(amount)}</td><td>{formatBRL(fuel)}</td><td>{formatBRL(toll)}</td><td>{formatBRL(dailyAllowance)}</td>
+                          <td>{formatBRL(amount + fuel + toll + dailyAllowance)}</td>
+                        </tr>
+                      );
+                    })}
+                    {!monthlyExpensesError && monthlyExpenseRows.length === 0 && <tr><td colSpan={9} className="text-center py-3">Nenhum gasto registrado neste mês e filtro.</td></tr>}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+            <div className="flex justify-end">
+              <button className="lm-btn lm-btn-dark" onClick={() => setMonthlyExpensesOpen(false)}>FECHAR</button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
       <Dialog open={eventDialogOpen} onOpenChange={setEventDialogOpen}>
         <DialogContent data-testid="dashboard-event-dialog">
           <DialogHeader>
