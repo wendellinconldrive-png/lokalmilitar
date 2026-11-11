@@ -15,12 +15,14 @@ export default function ProductSearchSelect({
   const [focused, setFocused] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
   const selectedProduct = products.find((product) => product.id === value);
+  const canShowOptions = Array.from(query.trim()).length >= 2;
   const options = useMemo(() => {
+    if (!canShowOptions) return [];
     const search = query.trim().toLocaleLowerCase();
     return products.filter((product) => (
-      !search || `${product.name || ""} ${product.sku || ""}`.toLocaleLowerCase().includes(search)
+      search && `${product.name || ""} ${product.sku || ""}`.toLocaleLowerCase().includes(search)
     )).slice(0, 100);
-  }, [products, query]);
+  }, [canShowOptions, products, query]);
   const selectOption = (product, advance = false, input) => {
     onChange(product.id);
     setQuery("");
@@ -52,8 +54,7 @@ export default function ProductSearchSelect({
         value={focused ? query : selectedProduct ? `${selectedProduct.name} (${selectedProduct.sku})` : ""}
         placeholder={placeholder}
         onFocus={(event) => {
-          const currentValue = selectedProduct ? selectedProduct.name : "";
-          setQuery(currentValue);
+          setQuery("");
           setActiveIndex(0);
           setFocused(true);
           event.currentTarget.select();
@@ -63,12 +64,12 @@ export default function ProductSearchSelect({
         onKeyDown={handleKeyDown}
         role="combobox"
         aria-autocomplete="list"
-        aria-expanded={focused}
+        aria-expanded={focused && canShowOptions}
         aria-controls={testid ? `${testid}-options` : undefined}
         aria-activedescendant={focused && options[activeIndex] ? optionId(options[activeIndex]) : undefined}
         data-testid={testid}
       />
-      {focused && (
+      {focused && canShowOptions && (
         <div
           id={testid ? `${testid}-options` : undefined}
           role="listbox"
@@ -81,7 +82,8 @@ export default function ProductSearchSelect({
               type="button"
               role="option"
               aria-selected={product.id === value}
-              className={`block w-full border-b px-3 py-2 text-left text-sm last:border-0 hover:bg-[#F4EFE3] ${activeIndex === index ? "bg-[#F4EFE3]" : ""}`}
+              className={`block w-full border-b px-3 py-2 text-left text-sm last:border-0 hover:bg-[var(--selection-blue)] hover:text-white ${activeIndex === index ? "text-white" : ""}`}
+              style={{ backgroundColor: activeIndex === index ? "var(--selection-blue)" : undefined }}
               onMouseDown={(event) => event.preventDefault()}
               onMouseEnter={() => setActiveIndex(index)}
               onClick={() => selectOption(product)}

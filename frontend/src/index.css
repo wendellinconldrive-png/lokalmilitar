@@ -10,6 +10,7 @@
   --olive-dark: color-mix(in srgb, var(--olive) 82%, #000000);
   --khaki: #C3B091;
   --gold: #B8860B;
+  --selection-blue: #1F67C9;
   --ink: #111111;
   --cream: #FBF9F4;
   --line: #E2DCCF;
@@ -165,6 +166,10 @@ h1, h2, h3 { color: var(--title-color); }
   border-color: var(--line);
 }
 .lm-input:focus, .input:focus, .crud-input:focus { border-color: var(--olive); outline: none; }
+select option:checked, select option:focus, select option:hover {
+  background-color: var(--selection-blue);
+  color: #FFFFFF;
+}
 
 /* Tables */
 .lm-table-wrap { background: var(--cream); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }

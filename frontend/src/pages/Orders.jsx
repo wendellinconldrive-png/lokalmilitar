@@ -233,7 +233,7 @@ export default function Orders({ mode }) {
 
   const addItem = useCallback(() => setEditing((current) => current && ({
     ...current,
-    items: [...current.items, { product_id: "", name: "", size: "", qty: 1, unit_price: 0 }],
+    items: [...current.items, { product_id: "", name: "", size: "", qty: "", unit_price: 0 }],
   })), []);
   useEffect(() => {
     if (!open) return undefined;
@@ -293,6 +293,10 @@ export default function Orders({ mode }) {
       const emptyProductIndex = editing.items.findIndex((item) => !item.product_id);
       if (emptyProductIndex !== -1) {
         return toast.error(`Selecione um produto ou remova o item ${emptyProductIndex + 1}`);
+      }
+      const invalidQuantityIndex = editing.items.findIndex((item) => !Number.isFinite(Number(item.qty)) || Number(item.qty) <= 0);
+      if (invalidQuantityIndex !== -1) {
+        return toast.error(`Informe uma quantidade maior que zero para o item ${invalidQuantityIndex + 1}`);
       }
       const invalidItemSize = editing.items.some((item) => {
         const sizes = prodById[item.product_id]?.sizes || [];
@@ -1056,7 +1060,7 @@ export default function Orders({ mode }) {
                     </select>
                     <label className="col-span-2 sm:col-span-2 min-w-0">
                       <span className="block text-[10px] leading-tight text-neutral-600 mb-1">Quantidade</span>
-                      <input className="input" type="number" min="1" step="1" value={it.qty} onChange={e=>setItem(i,{qty:Number(e.target.value)})} aria-label={`Quantidade do item ${i + 1}`}/>
+                      <input className="input" type="number" min="1" step="1" value={it.qty ?? ""} onChange={e=>setItem(i,{qty:e.target.value})} aria-label={`Quantidade do item ${i + 1}`}/>
                     </label>
                     <label className="col-span-2 sm:col-span-3 min-w-0">
                       <span className="block text-[10px] leading-tight text-neutral-600 mb-1">Valor unitário (R$)</span>

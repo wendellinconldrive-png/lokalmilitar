@@ -13,17 +13,19 @@ export default function CustomerSearchSelect({
   const [focused, setFocused] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
   const selectedCustomer = customers.find((customer) => customer.id === value);
+  const canShowOptions = Array.from(query.trim()).length >= 2;
   const options = useMemo(() => {
+    if (!canShowOptions) return [];
     const search = query.trim().toLocaleLowerCase();
     return customers.filter((customer) => (
-      !search || [
+      search && [
         customer.name,
         customer.nome_guerra,
         customer.cpf,
         customer.phone,
       ].some((field) => String(field || "").toLocaleLowerCase().includes(search))
     )).slice(0, 100);
-  }, [customers, query]);
+  }, [canShowOptions, customers, query]);
 
   const selectCustomer = (customer, advance = false, input) => {
     onChange(customer.id);
@@ -55,7 +57,7 @@ export default function CustomerSearchSelect({
         value={focused ? query : selectedCustomer?.name || ""}
         placeholder="Buscar cliente por nome, nome de guerra, CPF ou telefone..."
         onFocus={(event) => {
-          setQuery(selectedCustomer?.name || "");
+          setQuery("");
           setActiveIndex(0);
           setFocused(true);
           event.currentTarget.select();
@@ -65,11 +67,12 @@ export default function CustomerSearchSelect({
         onKeyDown={handleKeyDown}
         role="combobox"
         aria-autocomplete="list"
-        aria-expanded={focused}
+        aria-expanded={focused && canShowOptions}
         aria-controls={testid ? `${testid}-options` : undefined}
+        aria-activedescendant={focused && canShowOptions && options[activeIndex] ? `${testid || "customer-search"}-option-${options[activeIndex].id}` : undefined}
         data-testid={testid}
       />
-      {focused && (
+      {focused && canShowOptions && (
         <div
           id={testid ? `${testid}-options` : undefined}
           role="listbox"
@@ -81,7 +84,9 @@ export default function CustomerSearchSelect({
               type="button"
               role="option"
               aria-selected={customer.id === value}
-              className={`block w-full border-b px-3 py-2 text-left text-sm last:border-0 hover:bg-[#F4EFE3] ${activeIndex === index ? "bg-[#F4EFE3]" : ""}`}
+              id={`${testid || "customer-search"}-option-${customer.id}`}
+              className={`block w-full border-b px-3 py-2 text-left text-sm last:border-0 hover:bg-[var(--selection-blue)] hover:text-white ${activeIndex === index ? "text-white" : ""}`}
+              style={{ backgroundColor: activeIndex === index ? "var(--selection-blue)" : undefined }}
               onMouseDown={(event) => event.preventDefault()}
               onMouseEnter={() => setActiveIndex(index)}
               onClick={() => selectCustomer(customer)}
