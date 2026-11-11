@@ -720,10 +720,7 @@ export default function Orders({ mode }) {
 
       {!isTrocas && (
         <>
-          <div className="lm-card p-3 mb-3 flex flex-wrap items-center justify-between gap-2">
-            <div className="text-sm text-neutral-600" aria-live="polite">
-              {shownOrders.length} pedido(s) · {selectedVisibleOrderIds.length} selecionado(s)
-            </div>
+          <div className="mb-3 flex justify-end">
             <button
               type="button"
               className="lm-btn lm-btn-outline"
