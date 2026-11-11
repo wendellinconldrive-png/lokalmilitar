@@ -224,7 +224,14 @@ export default function Orders({ mode }) {
     };
   }, [batchPrinting]);
   const startFulfillment = (order, deliveryType = "ENTREGA") => {
-    setFulfillment({ order, delivery_type: deliveryType, vehicle_id: "", signature: "", step: "review" });
+    setFulfillment({
+      order,
+      delivery_type: deliveryType,
+      vehicle_id: "",
+      signature: "",
+      signer_name: order.signer_name || "",
+      step: "review",
+    });
   };
   const closeFulfillment = () => {
     window.screen?.orientation?.unlock?.();
@@ -501,6 +508,7 @@ export default function Orders({ mode }) {
         delivery_type: fulfillment.delivery_type,
         vehicle_id: fulfillment.delivery_type === "ENTREGA" ? fulfillment.vehicle_id || null : null,
         signature: fulfillment.signature || null,
+        signer_name: fulfillment.signer_name?.trim() || null,
       });
       setOrders((current) => current.map((order) => (
         order.id === fulfillment.order.id ? response.data : order
@@ -1219,6 +1227,21 @@ export default function Orders({ mode }) {
                     </div>
                     {fulfillment.order.notes && <p className="border-t pt-2 text-sm"><strong>Observações:</strong> {fulfillment.order.notes}</p>}
                   </div>
+                  <label className="block text-sm">
+                    Nome de quem está assinando
+                    <input
+                      type="text"
+                      maxLength={200}
+                      className="input mt-1"
+                      value={fulfillment.signer_name}
+                      onChange={(event) => setFulfillment((current) => current ? {
+                        ...current,
+                        signer_name: event.target.value,
+                      } : current)}
+                      placeholder="Nome completo"
+                      data-testid="fulfillment-signer-name"
+                    />
+                  </label>
                   <label className="block text-sm">Como o cliente receberá o pedido?
                     <select className="input mt-1" value={fulfillment.delivery_type}
                       onChange={(event) => setFulfillment({ ...fulfillment, delivery_type: event.target.value, vehicle_id: "" })}

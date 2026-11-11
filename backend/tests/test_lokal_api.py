@@ -1880,10 +1880,11 @@ def test_day_close_is_saved_and_idempotent(admin):
     CREATED["orders"].append(order["id"])
     fulfilled = admin.post(
         f"{BASE_URL}/api/orders/{order['id']}/fulfill",
-        json={"delivery_type": "RETIRADA"},
+        json={"delivery_type": "RETIRADA", "signer_name": "TEST_Responsável pela retirada"},
     )
     assert fulfilled.status_code == 200, fulfilled.text
     assert fulfilled.json()["fulfilled_at"]
+    assert fulfilled.json()["signer_name"] == "TEST_Responsável pela retirada"
     order_movements = [
         movement
         for movement in admin.get(f"{BASE_URL}/api/stock_movements").json()

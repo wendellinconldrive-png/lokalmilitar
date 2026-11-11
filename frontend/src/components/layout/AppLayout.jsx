@@ -343,7 +343,7 @@ export default function AppLayout() {
       </div>
 
       <aside className={`lokal-sidebar no-print ${open ? "block" : "hidden"} md:block fixed md:static z-30 top-12 md:top-0 left-0 w-64 md:min-h-screen`}>
-        <div className="hidden md:flex h-[92px] items-center justify-center px-4 border-b border-neutral-800" data-testid="sidebar-logo">
+        <div className="hidden md:flex h-[92px] items-start justify-center px-4 pt-6 border-b border-neutral-800" data-testid="sidebar-logo">
           <BrandMark align="center" compact />
         </div>
         <nav className="py-2">

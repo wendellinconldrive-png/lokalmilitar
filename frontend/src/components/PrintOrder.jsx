@@ -169,6 +169,7 @@ export default function PrintOrderA4({ order, settings, customer, vendor, captur
         <div>
           {order.signature && <img src={order.signature} alt="Assinatura do cliente" style={{ display: "block", maxWidth: "100%", height: 52, objectFit: "contain", margin: "0 auto 4px" }} />}
           <div style={{ borderTop: `1px solid ${C.ink}`, paddingTop: 4 }}>Assinatura do cliente</div>
+          {order.signer_name && <div style={{ marginTop: 3, fontSize: 10, fontWeight: 600 }}>{order.signer_name}</div>}
         </div>
         <div>
           {vendor?.signature && <img src={vendor.signature} alt="Assinatura do vendedor" style={{ display: "block", maxWidth: "100%", height: 52, objectFit: "contain", margin: "0 auto 4px" }} />}

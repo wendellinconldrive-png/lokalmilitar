@@ -541,6 +541,7 @@ class Order(BaseModel):
     vehicle_name: Optional[str] = None
     delivery_type: Optional[str] = None  # ENTREGA | RETIRADA | CORREIO
     signature: Optional[str] = None
+    signer_name: Optional[str] = None
     whatsapp_shared_at: Optional[str] = None
     whatsapp_share_count: int = 0
     stock_applied: bool = False
@@ -2263,6 +2264,11 @@ async def fulfill_order(oid: str, payload: dict, user: dict = Depends(get_curren
         "status": "Retirado" if delivery_type == "RETIRADA" else "Entregue",
         "delivery_type": delivery_type,
     }
+    signer_name = payload.get("signer_name")
+    if signer_name is not None:
+        if not isinstance(signer_name, str) or len(signer_name) > 200:
+            raise HTTPException(400, "Informe um nome válido para quem está assinando")
+        update["signer_name"] = signer_name.strip() or None
     vehicle_id = payload.get("vehicle_id")
     if vehicle_id:
         vehicle = await db.vehicles.find_one({"id": vehicle_id, "active": {"$ne": False}}, {"_id": 0})
