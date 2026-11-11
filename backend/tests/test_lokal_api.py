@@ -1813,6 +1813,54 @@ def test_seller_can_archive_dashboard_announcement_from_pending(admin):
     finally:
         admin.delete(f"{BASE_URL}/api/dashboard/events/{event['id']}")
 
+def test_seller_can_set_order_status_to_separated_or_cancelled(admin):
+    created_user = admin.post(
+        f"{BASE_URL}/api/auth/users",
+        json={
+            "email": f"test_order_status_{uuid.uuid4().hex[:8]}@lokal.com",
+            "password": "status123",
+            "name": "TEST_Order_Status_Seller",
+            "role": "vendedor",
+        },
+    )
+    assert created_user.status_code == 200, created_user.text
+    user = created_user.json()
+    CREATED["users"].append(user["id"])
+    order_response = admin.post(
+        f"{BASE_URL}/api/orders",
+        json={"customer_name": "TEST_Status_Vendedor", "items": []},
+    )
+    assert order_response.status_code == 200, order_response.text
+    order = order_response.json()
+    CREATED["orders"].append(order["id"])
+    login = requests.post(
+        f"{BASE_URL}/api/auth/login",
+        json={"email": user["email"], "password": "status123"},
+    )
+    assert login.status_code == 200, login.text
+    seller = requests.Session()
+    seller.headers["Authorization"] = "Bearer " + login.json()["access_token"]
+
+    separated = seller.put(
+        f"{BASE_URL}/api/orders/{order['id']}",
+        json={"status": "Separado"},
+    )
+    assert separated.status_code == 200, separated.text
+    assert separated.json()["status"] == "Separado"
+
+    cancelled = seller.put(
+        f"{BASE_URL}/api/orders/{order['id']}",
+        json={"status": "Cancelado"},
+    )
+    assert cancelled.status_code == 200, cancelled.text
+    assert cancelled.json()["status"] == "Cancelado"
+
+    invalid_status = seller.put(
+        f"{BASE_URL}/api/orders/{order['id']}",
+        json={"status": "Anotado"},
+    )
+    assert invalid_status.status_code == 403
+
 @pytest.mark.parametrize("role", ["vendedor", "visualizador"])
 def test_non_admin_users_can_register_dashboard_events(admin, role):
     created_user = admin.post(

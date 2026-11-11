@@ -2138,6 +2138,8 @@ async def _update_order(oid: str, payload: dict, user: dict, allow_fulfillment: 
         and not allow_fulfillment
         and user.get("role") != "admin"
     ):
+        if user.get("role") == "vendedor" and payload["status"] not in ("Separado", "Cancelado"):
+            raise HTTPException(403, "Vendedores podem alterar pedidos somente para Separado ou Cancelado")
         if _order_is_fulfilled(old):
             raise HTTPException(403, "Somente administradores podem alterar o status de um pedido concluído")
         if _order_is_fulfilled({"status": payload["status"]}):

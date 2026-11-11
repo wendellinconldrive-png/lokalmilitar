@@ -23,6 +23,7 @@ const BLANK_ORDER = {
 const ORDER_STATUSES = ["Anotado", "Separado", "Entregue", "Retirado", "Cancelado"];
 const EDITABLE_ORDER_STATUSES = ["Anotado", "Separado", "Cancelado"];
 const BULK_ORDER_STATUSES = ["Anotado", "Separado", "Cancelado"];
+const SELLER_ORDER_STATUSES = ["Separado", "Cancelado"];
 const localDateValue = (date = new Date()) => {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -45,6 +46,9 @@ export default function Orders({ mode }) {
   const location = useLocation();
   const navigate = useNavigate();
   const isAdmin = user?.role === "admin";
+  const canChangeOrderStatus = isAdmin || user?.role === "vendedor";
+  const editableOrderStatuses = user?.role === "vendedor" ? SELLER_ORDER_STATUSES : EDITABLE_ORDER_STATUSES;
+  const bulkOrderStatuses = user?.role === "vendedor" ? SELLER_ORDER_STATUSES : BULK_ORDER_STATUSES;
   const isTrocas = mode === "trocas";
   const [searchParams, setSearchParams] = useSearchParams();
   const autoPrintOrderId = searchParams.get("printOrder");
@@ -781,13 +785,13 @@ export default function Orders({ mode }) {
         >
           <Printer size={14} />{printingSelectedOrders ? "Preparando..." : "Imprimir selecionados (A4)"}
         </button>
-        {isAdmin && (
+        {canChangeOrderStatus && (
           <>
             <label className="text-xs">
               Alterar status para
               <select className="input mt-1 min-w-40" value={bulkStatus} onChange={(event) => setBulkStatus(event.target.value)} data-testid="bulk-order-status">
                 <option value="">Selecione...</option>
-                {BULK_ORDER_STATUSES.map((status) => <option key={status} value={status}>{status}</option>)}
+                {bulkOrderStatuses.map((status) => <option key={status} value={status}>{status}</option>)}
               </select>
             </label>
             <button
@@ -799,6 +803,10 @@ export default function Orders({ mode }) {
             >
               <Check size={14} />{updatingBulkStatus ? "Atualizando..." : "Aplicar aos selecionados"}
             </button>
+          </>
+        )}
+        {isAdmin && (
+          <>
             <button
               type="button"
               className="lm-btn lm-btn-outline"
@@ -862,7 +870,7 @@ export default function Orders({ mode }) {
                 <td>{formatBRL(o.total||0)}</td>
                 <td>{o.payment}</td>
                 <td>
-                  {isAdmin ? (
+                  {canChangeOrderStatus ? (
                     <select
                       className="max-w-[110px] text-[10px] px-1 py-0.5 bg-neutral-200"
                       value={o.status}
@@ -870,8 +878,8 @@ export default function Orders({ mode }) {
                       aria-label={`Status do pedido #${o.number}`}
                       data-testid={`order-status-${o.number}`}
                     >
-                      {!EDITABLE_ORDER_STATUSES.includes(o.status) && <option disabled>{o.status}</option>}
-                      {EDITABLE_ORDER_STATUSES.map((status) => <option key={status}>{status}</option>)}
+                      {!editableOrderStatuses.includes(o.status) && <option disabled>{o.status}</option>}
+                      {editableOrderStatuses.map((status) => <option key={status}>{status}</option>)}
                     </select>
                   ) : (
                     <span className="text-[10px] px-2 py-0.5 bg-neutral-200">{o.status}</span>
@@ -980,9 +988,9 @@ export default function Orders({ mode }) {
                   </select></label>
                 <label><div className="text-[11px] font-mono text-neutral-500">Status</div>
                   <select className="input" value={editing.status} disabled={!isAdmin && ["Entregue", "Retirado"].includes(editing.status)} onChange={e=>setEditing({...editing, status:e.target.value})}>
-                    {EDITABLE_ORDER_STATUSES.map((status) => <option key={status}>{status}</option>)}
+                    {editableOrderStatuses.map((status) => <option key={status}>{status}</option>)}
                     {["Entregue", "Retirado"].includes(editing.status) && <option>{editing.status}</option>}
-                    {!EDITABLE_ORDER_STATUSES.includes(editing.status) && !["Entregue", "Retirado"].includes(editing.status) && <option disabled>{editing.status}</option>}
+                    {!editableOrderStatuses.includes(editing.status) && !["Entregue", "Retirado"].includes(editing.status) && <option disabled>{editing.status}</option>}
                   </select></label>
                 <label><div className="text-[11px] font-mono text-neutral-500">Pagamento</div>
                   <select className="input" value={editing.payment} onChange={e=>setEditing({...editing, payment:e.target.value})}>
