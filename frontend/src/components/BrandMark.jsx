@@ -1,7 +1,7 @@
 import React from "react";
 
 export default function BrandMark({ align = "left", compact = false, light = false }) {
-  const titleSize = compact ? 19 : 22;
+  const titleSize = compact ? 32 : 22;
   const subtitleSize = compact ? 9 : 10;
   const titleStyle = {
     fontFamily: "'Black Ops One', 'Saira Stencil One', sans-serif",
