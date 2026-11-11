@@ -372,7 +372,7 @@ export default function Stock() {
         </div>
       </div>
 
-      <div className="lm-card p-3 flex flex-wrap gap-2 mb-4">
+      <div className="flex flex-wrap gap-2 mb-4">
         <button className="lm-btn lm-btn-dark" onClick={() => printBy(false)} data-testid="btn-print-full"><Printer size={15} />Imprimir estoque completo A4</button>
         <button className="lm-btn lm-btn-outline" onClick={() => { setCountedQuantities({}); setReconciliationSearch(""); setReconciliationOpen(true); }} data-testid="btn-stock-reconciliation"><FileText size={15} />Conferência de estoque</button>
         <button className="lm-btn lm-btn-dark" onClick={() => printBy(true)} data-testid="btn-print-cat"><Printer size={15} />Imprimir estoque por categoria</button>
