@@ -278,12 +278,14 @@ export default function Products() {
         <div><h1>Produtos</h1><p>{products.length} produtos cadastrados · grade militar e vínculos de montagem/desmontagem</p></div>
         <button className="lm-btn lm-btn-olive" onClick={() => setEditing({ ...BLANK })} data-testid="btn-new-product"><Plus size={16} />Novo produto</button>
       </div>
-      <div className="flex flex-col sm:flex-row gap-2 mb-3 sm:max-w-3xl">
-        <div className="relative sm:flex-1"><Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-neutral-400" />
-          <input placeholder="Buscar por nome, SKU, categoria, cor..." value={search} onChange={(e) => setSearch(e.target.value)} className="lm-input lm-search-input" data-testid="search-products" /></div>
-        <label className="sm:w-64">
+      <div className="grid grid-cols-1 gap-2 mb-3 sm:grid-cols-2 lg:grid-cols-[minmax(160px,1fr)_minmax(180px,1fr)_auto_auto]">
+        <div className="relative min-w-0 sm:col-span-2 lg:col-span-4">
+          <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-neutral-400" />
+          <input placeholder="Buscar por nome, SKU, categoria, cor..." value={search} onChange={(e) => setSearch(e.target.value)} className="lm-input lm-search-input w-full" data-testid="search-products" />
+        </div>
+        <label className="min-w-0">
           <span className="sr-only">Filtrar produtos por categoria</span>
-          <select className="lm-input" value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)} data-testid="filter-products-category">
+          <select className="lm-input w-full" value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)} data-testid="filter-products-category">
             <option value="">Todas as categorias</option>
             {categories.filter((category) => !category.parent_id).map((category) => (
               <React.Fragment key={category.id}>
@@ -295,9 +297,9 @@ export default function Products() {
             ))}
           </select>
         </label>
-        <label className="sm:w-56">
+        <label className="min-w-0">
           <span className="sr-only">Classificar produtos por</span>
-          <select className="lm-input" value={sortBy} onChange={(event) => setSortBy(event.target.value)} data-testid="sort-products">
+          <select className="lm-input w-full" value={sortBy} onChange={(event) => setSortBy(event.target.value)} data-testid="sort-products">
             <option value="name">Ordenar por nome</option>
             <option value="sku">Ordenar por SKU</option>
             <option value="category">Ordenar por categoria</option>
@@ -310,7 +312,7 @@ export default function Products() {
         </label>
         <button
           type="button"
-          className="lm-btn lm-btn-outline"
+          className="lm-btn lm-btn-outline shrink-0 justify-center whitespace-nowrap"
           onClick={() => setSortDirection((direction) => direction === "asc" ? "desc" : "asc")}
           aria-label={sortDirection === "asc" ? "Ordem crescente" : "Ordem decrescente"}
           data-testid="sort-products-direction"
@@ -319,7 +321,7 @@ export default function Products() {
         </button>
         <button
           type="button"
-          className={`lm-btn ${showMountable ? "lm-btn-olive" : "lm-btn-outline"}`}
+          className={`lm-btn shrink-0 justify-center whitespace-nowrap ${showMountable ? "lm-btn-olive" : "lm-btn-outline"}`}
           onClick={toggleMountableFilter}
           data-testid="filter-mountable-products"
         >
