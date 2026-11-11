@@ -7,7 +7,12 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sh
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import useSubmitLock from "@/hooks/useSubmitLock";
 
-const BLANK = { name: "", sku: "", category_id: "", subcategory_id: "", color: "", brand: "", shelf: "", cost: 0, price: 0, commission: 1, sizes: [], linked_ids: [], photo: "", photo_url: "" };
+const BLANK = { name: "", sku: "", category_id: "", subcategory_id: "", color: "", brand: "", shelf: "", cost: 0, price: 0, commission: 1, sizes: [], stock_min: 0, linked_ids: [], photo: "", photo_url: "" };
+
+const productForEditing = (product) => {
+  const copy = JSON.parse(JSON.stringify(product));
+  return { ...copy, stock_min: copy.sizes?.[0]?.stock_min ?? 0 };
+};
 
 const Field = ({ label, children, wide }) => (
   <label className={`block ${wide ? "md:col-span-2" : ""}`}><div className="font-head text-[11px] text-neutral-600 mb-1">{label}</div>{children}</label>
@@ -203,7 +208,7 @@ export default function Products() {
     if (!productId) return undefined;
     let active = true;
     api.get(`/products/${productId}`).then(({ data }) => {
-      if (active) setEditing(JSON.parse(JSON.stringify(data)));
+      if (active) setEditing(productForEditing(data));
     }).catch((error) => {
       if (active) toast.error(error.response?.data?.detail || "Não foi possível carregar o produto");
     });
@@ -219,16 +224,18 @@ export default function Products() {
 
   const save = () => withSubmitLock("save", async () => {
     if (!editing.name || !editing.sku) return toast.error("Nome e SKU obrigatórios");
+    const { stock_min, ...product } = editing;
+    product.sizes = (product.sizes || []).map((size) => ({ ...size, stock_min: Number(stock_min || 0) }));
     try {
-      if (editing.id) await api.put(`/products/${editing.id}`, editing);
-      else await api.post("/products", editing);
+      if (editing.id) await api.put(`/products/${editing.id}`, product);
+      else await api.post("/products", product);
       toast.success("Produto salvo"); setEditing(null); load();
     } catch { toast.error("Erro ao salvar"); }
   });
   const openEdit = async (productId) => {
     try {
       const { data } = await api.get(`/products/${productId}`);
-      setEditing(JSON.parse(JSON.stringify(data)));
+      setEditing(productForEditing(data));
     } catch (error) {
       toast.error(error.response?.data?.detail || "Não foi possível carregar o produto");
     }
@@ -236,7 +243,7 @@ export default function Products() {
   const remove = async (id) => { if (!window.confirm("Excluir produto?")) return; await api.delete(`/products/${id}`); toast.success("Removido"); load(); };
   const onPhoto = (f) => { if (!f) return; const r = new FileReader(); r.onload = () => setEditing((e) => ({ ...e, photo: r.result, photo_url: "" })); r.readAsDataURL(f); };
   const setSize = (i, patch) => setEditing((e) => { const sz = [...e.sizes]; sz[i] = { ...sz[i], ...patch }; return { ...e, sizes: sz }; });
-  const addSize = (size = "") => setEditing((e) => (e.sizes.some((s) => s.size === size && size) ? e : { ...e, sizes: [...e.sizes, { size, stock: 0, stock_min: 0 }] }));
+  const addSize = (size = "") => setEditing((e) => (e.sizes.some((s) => s.size === size && size) ? e : { ...e, sizes: [...e.sizes, { size, stock: 0, stock_min: Number(e.stock_min || 0) }] }));
 
   const filtered = products.filter((p) => {
     const matchesCategory = !categoryFilter || p.category_id === categoryFilter || p.subcategory_id === categoryFilter;
@@ -415,12 +422,15 @@ export default function Products() {
                 {gridObj && <div className="flex flex-wrap gap-1 my-2">{gridObj.sizes.map((s) => (
                   <button key={s} type="button" className="chip hover:bg-[#d8cfbc]" onClick={() => addSize(s)} data-testid={`p-grid-${s}`}>+ {s}</button>
                 ))}</div>}
-                {editing.sizes.length > 0 && <div className="grid grid-cols-4 gap-2 mt-2 font-head text-[11px] text-neutral-600"><span>Tamanho</span><span>Estoque</span><span>Mínimo</span><span></span></div>}
+                <Field label="Estoque mínimo por variação">
+                  <input type="number" min="0" className="lm-input" value={editing.stock_min ?? 0} onChange={(e) => setEditing({ ...editing, stock_min: Number(e.target.value) })} data-testid="p-min" />
+                  <span className="text-xs text-neutral-500">Este mínimo será aplicado a cada tamanho do produto.</span>
+                </Field>
+                {editing.sizes.length > 0 && <div className="grid grid-cols-3 gap-2 mt-2 font-head text-[11px] text-neutral-600"><span>Tamanho</span><span>Estoque</span><span></span></div>}
                 {editing.sizes.map((s, i) => (
-                  <div key={i} className="grid grid-cols-4 gap-2 mt-1 items-center">
+                  <div key={i} className="grid grid-cols-3 gap-2 mt-1 items-center">
                     <input className="lm-input" value={s.size} onChange={(e) => setSize(i, { size: e.target.value })} data-testid={`p-size-${i}`} />
                     <input type="number" className="lm-input" value={s.stock} onChange={(e) => setSize(i, { stock: Number(e.target.value) })} data-testid={`p-stock-${i}`} />
-                    <input type="number" className="lm-input" value={s.stock_min} onChange={(e) => setSize(i, { stock_min: Number(e.target.value) })} data-testid={`p-min-${i}`} />
                     <button type="button" className="text-red-700 text-xs" onClick={() => setEditing({ ...editing, sizes: editing.sizes.filter((_, x) => x !== i) })}>remover</button>
                   </div>
                 ))}
