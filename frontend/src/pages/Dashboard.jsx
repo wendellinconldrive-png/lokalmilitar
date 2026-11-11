@@ -144,6 +144,7 @@ export default function Dashboard() {
   const nav = useNavigate();
   const { dashboardPreferences, user, logout } = useAuth();
   const isAdmin = user?.role === "admin";
+  const canArchiveEvents = isAdmin || user?.role === "vendedor";
   const [data, setData] = useState(null);
   const [cats, setCats] = useState([]);
   const [error, setError] = useState("");
@@ -566,7 +567,7 @@ export default function Dashboard() {
                 </p>
                 {event.description && <p className="mt-1 text-sm whitespace-pre-wrap">{event.description}</p>}
               </div>
-              {isAdmin && <button className="text-neutral-700 p-1" onClick={() => archiveEvent(event)} aria-label={`${event.archived ? "Restaurar" : "Arquivar"} anotação ${event.title}`} title={event.archived ? "Restaurar anotação" : "Arquivar como executada"}>
+              {canArchiveEvents && (!event.archived || isAdmin) && <button className="text-neutral-700 p-1" onClick={() => archiveEvent(event)} aria-label={`${event.archived ? "Restaurar" : "Arquivar"} anotação ${event.title}`} title={event.archived ? "Restaurar anotação" : "Arquivar como executada"}>
                 {event.archived ? <ArchiveRestore size={15} /> : <Archive size={15} />}
               </button>}
             </article>

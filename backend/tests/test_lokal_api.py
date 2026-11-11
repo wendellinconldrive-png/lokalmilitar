@@ -1764,6 +1764,55 @@ def test_dashboard_pending_can_be_archived_for_current_account(admin):
     finally:
         admin.delete(f"{BASE_URL}/api/dashboard/events/{event['id']}")
 
+def test_seller_can_archive_dashboard_announcement_from_pending(admin):
+    created_user = admin.post(
+        f"{BASE_URL}/api/auth/users",
+        json={
+            "email": f"test_archive_event_{uuid.uuid4().hex[:8]}@lokal.com",
+            "password": "event123",
+            "name": "TEST_Archive_Event_Seller",
+            "role": "vendedor",
+        },
+    )
+    assert created_user.status_code == 200, created_user.text
+    user = created_user.json()
+    CREATED["users"].append(user["id"])
+    event_response = admin.post(
+        f"{BASE_URL}/api/dashboard/events",
+        json={
+            "title": f"TEST_Aviso_vendedor_{uuid.uuid4().hex[:6]}",
+            "description": "Arquivamento pelo aviso de pendências",
+            "event_date": "2030-01-02",
+        },
+    )
+    assert event_response.status_code == 200, event_response.text
+    event = event_response.json()
+    try:
+        login = requests.post(
+            f"{BASE_URL}/api/auth/login",
+            json={"email": user["email"], "password": "event123"},
+        )
+        assert login.status_code == 200, login.text
+        seller = requests.Session()
+        seller.headers["Authorization"] = "Bearer " + login.json()["access_token"]
+
+        pending_id = f"event:{event['id']}"
+        pending = seller.get(f"{BASE_URL}/api/dashboard/pending")
+        assert pending.status_code == 200, pending.text
+        assert pending_id in {item["id"] for item in pending.json()["items"]}
+
+        archived = seller.post(
+            f"{BASE_URL}/api/dashboard/pending/{pending_id}/archive"
+        )
+        assert archived.status_code == 200, archived.text
+        assert archived.json() == {"archived": True}
+
+        dashboard_events = admin.get(f"{BASE_URL}/api/dashboard/events")
+        assert dashboard_events.status_code == 200, dashboard_events.text
+        assert next(item for item in dashboard_events.json() if item["id"] == event["id"])["archived"] is True
+    finally:
+        admin.delete(f"{BASE_URL}/api/dashboard/events/{event['id']}")
+
 @pytest.mark.parametrize("role", ["vendedor", "visualizador"])
 def test_non_admin_users_can_register_dashboard_events(admin, role):
     created_user = admin.post(

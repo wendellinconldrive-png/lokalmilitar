@@ -2687,8 +2687,10 @@ async def create_dashboard_event(payload: DashboardEventCreate, user: dict = Dep
 async def archive_dashboard_event(
     event_id: str,
     payload: DashboardEventArchive,
-    user: dict = Depends(require_admin),
+    user: dict = Depends(get_current_user),
 ):
+    if not payload.archived and user.get("role") != "admin":
+        raise HTTPException(403, "Somente administradores podem restaurar anotações")
     result = await db.dashboard_events.update_one(
         {"id": event_id},
         {"$set": {"archived": payload.archived}},

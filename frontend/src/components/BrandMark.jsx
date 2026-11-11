@@ -22,13 +22,12 @@ export default function BrandMark({ align = "left", compact = false, light = fal
         fontFamily: "'IBM Plex Mono', monospace",
         fontSize: subtitleSize,
         lineHeight: 1.4,
-        letterSpacing: "0.19em",
+        letterSpacing: "normal",
         marginTop: 5,
         textTransform: "uppercase",
         whiteSpace: "nowrap",
         width: "100%",
-        textAlign: "justify",
-        textAlignLast: "justify",
+        textAlign: align,
       }}>
         UM NOVO CONCEITO
       </div>
