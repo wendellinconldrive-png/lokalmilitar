@@ -1759,6 +1759,44 @@ def test_dashboard_pending_can_be_archived_for_current_account(admin):
     finally:
         admin.delete(f"{BASE_URL}/api/dashboard/events/{event['id']}")
 
+@pytest.mark.parametrize("role", ["vendedor", "visualizador"])
+def test_non_admin_users_can_register_dashboard_events(admin, role):
+    created_user = admin.post(
+        f"{BASE_URL}/api/auth/users",
+        json={
+            "email": f"test_evento_{role}_{uuid.uuid4().hex[:8]}@lokal.com",
+            "password": "event123",
+            "name": f"TEST_Evento_{role}",
+            "role": role,
+        },
+    )
+    assert created_user.status_code == 200, created_user.text
+    user = created_user.json()
+    CREATED["users"].append(user["id"])
+    event_id = None
+    try:
+        login = requests.post(
+            f"{BASE_URL}/api/auth/login",
+            json={"email": user["email"], "password": "event123"},
+        )
+        assert login.status_code == 200, login.text
+        account = requests.Session()
+        account.headers["Authorization"] = f"Bearer {login.json()['access_token']}"
+        response = account.post(
+            f"{BASE_URL}/api/dashboard/events",
+            json={
+                "title": f"TEST_Evento_{role}_{uuid.uuid4().hex[:6]}",
+                "description": "Evento registrado por perfil não administrador",
+                "event_date": "2030-01-02",
+            },
+        )
+        assert response.status_code == 200, response.text
+        event_id = response.json()["id"]
+        assert response.json()["created_by"] == user["name"]
+    finally:
+        if event_id:
+            admin.delete(f"{BASE_URL}/api/dashboard/events/{event_id}")
+
 
 def test_day_close_is_saved_and_idempotent(admin):
     product = _prod(admin, "TEST_Fechamento_Estoque", [{"size": "U", "stock": 100}])

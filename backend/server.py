@@ -159,7 +159,14 @@ async def get_current_user(
     )
     if not user:
         raise HTTPException(401, "User not found")
-    if request.method not in ("GET", "HEAD", "OPTIONS") and user.get("role") == "visualizador":
+    can_register_dashboard_event = (
+        request.method == "POST" and request.url.path == "/api/dashboard/events"
+    )
+    if (
+        request.method not in ("GET", "HEAD", "OPTIONS")
+        and user.get("role") == "visualizador"
+        and not can_register_dashboard_event
+    ):
         raise HTTPException(403, "Seu acesso permite apenas visualizar o sistema")
     return user
 
@@ -2656,7 +2663,7 @@ async def list_dashboard_events(user: dict = Depends(get_current_user)):
     ).to_list(500)
 
 @api.post("/dashboard/events")
-async def create_dashboard_event(payload: DashboardEventCreate, user: dict = Depends(require_admin)):
+async def create_dashboard_event(payload: DashboardEventCreate, user: dict = Depends(get_current_user)):
     title = payload.title.strip()
     if not title:
         raise HTTPException(400, "Informe o título do evento")

@@ -547,9 +547,14 @@ export default function Dashboard() {
     <section key="announcements" className="lm-card overflow-hidden col-span-full" style={{ background: colors.card_background, color: colors.card_text, borderColor: colors.card_border }} data-testid="dashboard-announcements">
       <DashboardCardHeader icon={CalendarDays} iconColor={colors.chart_accent} textColor={textColor}>Quadro de avisos</DashboardCardHeader>
       <div className="p-4 space-y-3">
-        <button className="text-xs underline" onClick={() => setShowArchivedEvents((shown) => !shown)} data-testid="toggle-archived-events">
-          {showArchivedEvents ? "Ver anotações ativas" : `Ver anotações arquivadas (${events.filter((event) => event.archived).length})`}
-        </button>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <button className="text-xs underline" onClick={() => setShowArchivedEvents((shown) => !shown)} data-testid="toggle-archived-events">
+            {showArchivedEvents ? "Ver anotações ativas" : `Ver anotações arquivadas (${events.filter((event) => event.archived).length})`}
+          </button>
+          <button className="lm-btn lm-btn-olive" onClick={() => setEventDialogOpen(true)} data-testid="register-dashboard-event">
+            <CalendarPlus size={16} />REGISTRAR EVENTO
+          </button>
+        </div>
         {eventsLoading ? <p className="text-sm text-neutral-500">Carregando eventos...</p> : visibleEvents.length ? (
           visibleEvents.map((event) => (
             <article key={event.id} className="flex items-start justify-between gap-3 border-b pb-3 last:border-0 last:pb-0" data-testid={`dashboard-event-${event.id}`}>
@@ -622,9 +627,6 @@ export default function Dashboard() {
           <div className="flex flex-wrap gap-2">
             <button className="lm-btn lm-btn-dark" onClick={openClosureHistory} disabled={loadingClosureHistory} data-testid="view-day-closures">
               <CalendarDays size={16} />{loadingClosureHistory ? "CARREGANDO..." : "DIAS ANTERIORES"}
-            </button>
-            <button className="lm-btn lm-btn-olive" onClick={() => setEventDialogOpen(true)} data-testid="register-dashboard-event">
-              <CalendarPlus size={16} />REGISTRAR EVENTO
             </button>
             <button className="lm-btn lm-btn-olive" onClick={openCloseDayDialog} disabled={closingDay} data-testid="close-day">
               <ClipboardCheck size={16} />{closingDay ? "FINALIZANDO..." : "FINALIZAR DIA"}
