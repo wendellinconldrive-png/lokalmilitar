@@ -906,8 +906,6 @@ export default function Orders({ mode }) {
                     <button className="p-1 hover:bg-green-100 text-green-800" onClick={()=>startFulfillment(o)} title="Registrar entrega ou retirada" data-testid={`fulfill-order-${o.number}`}><Truck size={13}/></button>
                   )}
                   <button className="p-1 hover:bg-neutral-200" onClick={()=>doPrint(o,"a4")} disabled={Boolean(loadingPrintOrderId)} data-testid={`print-a4-${o.number}`}><Printer size={13}/></button>
-                  <button className="p-1 hover:bg-neutral-200 text-[10px]" onClick={()=>doPrint(o,"80")} disabled={Boolean(loadingPrintOrderId)} data-testid={`print-80-${o.number}`}>80mm</button>
-                  <button className="p-1 hover:bg-neutral-200 text-[10px]" onClick={()=>doPrint(o,"a4")} disabled={Boolean(loadingPrintOrderId)} data-testid={`print-pdf-${o.number}`}>PDF</button>
                   <button className="p-1 hover:bg-red-100 text-red-700" onClick={()=>remove(o.id)}><Trash2 size={13}/></button>
                 </td>
               </tr>
