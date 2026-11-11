@@ -2812,6 +2812,13 @@ async def archive_dashboard_pending(
 ):
     if not pending_id.startswith(("event:", "order:", "maintenance:", "assembly:")):
         raise HTTPException(400, "Pendência inválida")
+    if pending_id.startswith("event:"):
+        result = await db.dashboard_events.update_one(
+            {"id": pending_id.removeprefix("event:")},
+            {"$set": {"archived": True}},
+        )
+        if result.matched_count == 0:
+            raise HTTPException(404, "Anotação não encontrada")
     archive_id = hashlib.sha256(f"{user['id']}:{pending_id}".encode()).hexdigest()
     await db.dashboard_pending_archives.update_one(
         {"_id": archive_id},

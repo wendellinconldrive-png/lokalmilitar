@@ -1744,6 +1744,10 @@ def test_dashboard_pending_can_be_archived_for_current_account(admin):
         assert archived.status_code == 200, archived.text
         assert archived.json() == {"archived": True}
 
+        board_events = admin.get(f"{BASE_URL}/api/dashboard/events")
+        assert board_events.status_code == 200, board_events.text
+        assert next(item for item in board_events.json() if item["id"] == event["id"])["archived"] is True
+
         remaining = admin.get(f"{BASE_URL}/api/dashboard/pending")
         assert remaining.status_code == 200, remaining.text
         assert pending_id not in {item["id"] for item in remaining.json()["items"]}

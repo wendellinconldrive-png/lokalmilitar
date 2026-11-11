@@ -71,10 +71,15 @@ export default function AppLayout() {
   }, [user?.id]);
 
   const archivePendingItem = async (item) => {
-    if (!window.confirm(`Confirmar que "${item.title}" foi realizado e arquivar esta pendência na sua conta?`)) return;
+    if (!window.confirm(`Confirmar que "${item.title}" foi realizado e arquivar esta pendência?${item.type === "anotacao" ? " Ela também será arquivada no quadro de avisos." : ""}`)) return;
     setArchivingPendingId(item.id);
     try {
       await api.post(`/dashboard/pending/${encodeURIComponent(item.id)}/archive`);
+      if (item.type === "anotacao") {
+        window.dispatchEvent(new CustomEvent("dashboard-event-archived", {
+          detail: { eventId: item.id.slice("event:".length) },
+        }));
+      }
       setPendingItems((current) => current.filter((pending) => pending.id !== item.id));
       toast.success("Pendência confirmada e arquivada");
       if (pendingItems.length === 1) setPendingDialogOpen(false);
@@ -222,7 +227,7 @@ export default function AppLayout() {
             <DialogTitle className="font-head">Pendências do sistema</DialogTitle>
             <DialogDescription>
               Confira anotações, pedidos em aberto, manutenções programadas e produtos que podem ser montados.
-              Ao confirmar e arquivar, a pendência deixa de aparecer na sua conta; o registro original não é alterado.
+              Ao confirmar, anotações também são arquivadas no quadro de avisos.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-2">

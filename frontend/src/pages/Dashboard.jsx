@@ -221,6 +221,17 @@ export default function Dashboard() {
   }, []);
 
   useEffect(() => {
+    const handlePendingEventArchived = ({ detail }) => {
+      if (!detail?.eventId) return;
+      setEvents((current) => current.map((event) => (
+        event.id === detail.eventId ? { ...event, archived: true } : event
+      )));
+    };
+    window.addEventListener("dashboard-event-archived", handlePendingEventArchived);
+    return () => window.removeEventListener("dashboard-event-archived", handlePendingEventArchived);
+  }, []);
+
+  useEffect(() => {
       if (!closureReport) {
         setClosureProducts(null);
         setPhysicalCounts({});
