@@ -248,26 +248,31 @@ class TestStock:
 # --- Orders / commission / desmontagem / trocas ---
 class TestOrders:
     def test_dashboard_pending_lists_products_that_can_be_assembled(self, admin):
-        trousers = _prod(admin, "TEST_Calça montável", [{"size": "M", "stock": 5}])
-        jacket = _prod(admin, "TEST_Gandola montável", [{"size": "M", "stock": 2}])
+        trousers = _prod(admin, "TEST_Calça montável", [
+            {"size": "M", "stock": 5},
+            {"size": "G", "stock": 1},
+        ])
+        jacket = _prod(admin, "TEST_Gandola montável", [
+            {"size": "M", "stock": 2},
+            {"size": "G", "stock": 4},
+        ])
         uniform = _prod(
             admin,
             "TEST_Farda montável",
-            [{"size": "M", "stock": 0}],
+            [{"size": "M", "stock": 0}, {"size": "G", "stock": 0}],
             linked_ids=[trousers["id"], jacket["id"]],
         )
 
         response = admin.get(f"{BASE_URL}/api/dashboard/pending")
         assert response.status_code == 200, response.text
-        assembly = next(
-            item for item in response.json()["items"]
-            if item["id"] == f"assembly:{uniform['id']}:M"
-        )
+        assemblies = [item for item in response.json()["items"] if item["type"] == "montagem"]
+        assert len(assemblies) == 1
+        assembly = assemblies[0]
+        assert assembly["id"] == "assembly:available"
         assert assembly["type"] == "montagem"
-        assert assembly["title"] == "Pode montar: TEST_Farda montável"
-        assert "até 2 unidade(s)" in assembly["body"]
-        assert "TEST_Calça montável, TEST_Gandola montável" in assembly["body"]
-        assert assembly["url"] == "/produtos"
+        assert assembly["title"] == "1 produto disponível para montagem"
+        assert "tamanhos e as quantidades disponíveis" in assembly["body"]
+        assert assembly["url"] == "/produtos?montaveis=1"
     def test_order_rejects_item_without_product(self, admin):
         response = admin.post(
             f"{BASE_URL}/api/orders",

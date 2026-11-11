@@ -2762,6 +2762,7 @@ async def dashboard_pending(user: dict = Depends(get_current_user)):
             "url": "/manutencao",
         })
     products_by_id = {product["id"]: product for product in products}
+    mountable_product_ids = set()
     for product in products:
         component_ids = product.get("linked_ids") or []
         if not component_ids:
@@ -2772,7 +2773,6 @@ async def dashboard_pending(user: dict = Depends(get_current_user)):
         components = [products_by_id.get(component_id) for component_id in component_counts]
         if any(component is None for component in components):
             continue
-        component_names = [products_by_id[component_id].get("name") or "Produto" for component_id in component_ids]
         for size in product.get("sizes", []):
             size_name = size.get("size")
             component_availability = []
@@ -2791,17 +2791,21 @@ async def dashboard_pending(user: dict = Depends(get_current_user)):
             mountable_quantity = min(component_availability, default=0)
             if mountable_quantity <= 0:
                 continue
-            items.append({
-                "id": f"assembly:{product['id']}:{size_name}",
-                "type": "montagem",
-                "title": f"Pode montar: {product.get('name') or 'Produto'}",
-                "body": (
-                    f"Tamanho {size_name} · até {mountable_quantity} unidade(s) "
-                    f"com {', '.join(component_names)}"
-                ),
-                "date": "",
-                "url": "/produtos",
-            })
+            mountable_product_ids.add(product["id"])
+    if mountable_product_ids:
+        mountable_count = len(mountable_product_ids)
+        items.append({
+            "id": "assembly:available",
+            "type": "montagem",
+            "title": (
+                f"{mountable_count} produto disponível para montagem"
+                if mountable_count == 1
+                else f"{mountable_count} produtos disponíveis para montagem"
+            ),
+            "body": "Acesse para consultar os tamanhos e as quantidades disponíveis.",
+            "date": "",
+            "url": "/produtos?montaveis=1",
+        })
     items.sort(key=lambda item: (item["date"] or "9999-12-31", item["type"], item["title"]))
     item_ids = [item["id"] for item in items]
     archived_items = await db.dashboard_pending_archives.find(

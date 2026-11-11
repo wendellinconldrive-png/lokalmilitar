@@ -256,16 +256,30 @@ export default function AppLayout() {
                   {item.body && <span className="block text-sm text-neutral-600">{item.body}</span>}
                 </button>
                 <div className="mt-2 flex justify-end">
-                  <button
-                    type="button"
-                    className="lm-btn lm-btn-olive"
-                    onClick={() => archivePendingItem(item)}
-                    disabled={Boolean(archivingPendingId)}
-                    data-testid={`archive-pending-${item.type}`}
-                  >
-                    <Check size={14} />
-                    {archivingPendingId === item.id ? "Arquivando..." : "Confirmar e arquivar"}
-                  </button>
+                  {item.type === "montagem" ? (
+                    <button
+                      type="button"
+                      className="lm-btn lm-btn-olive"
+                      onClick={() => {
+                        setPendingDialogOpen(false);
+                        navigate(item.url || "/produtos");
+                      }}
+                      data-testid="pending-mount-options"
+                    >
+                      Ver opções de montagem
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="lm-btn lm-btn-olive"
+                      onClick={() => archivePendingItem(item)}
+                      disabled={Boolean(archivingPendingId)}
+                      data-testid={`archive-pending-${item.type}`}
+                    >
+                      <Check size={14} />
+                      {archivingPendingId === item.id ? "Arquivando..." : "Confirmar e arquivar"}
+                    </button>
+                  )}
                 </div>
               </div>
             ))}

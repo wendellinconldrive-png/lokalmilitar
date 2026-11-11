@@ -6,6 +6,7 @@ import { Plus, Pencil, Trash2, Scissors, PackagePlus, Image as ImageIcon, Link2,
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import useSubmitLock from "@/hooks/useSubmitLock";
+import { getMountableQuantity, getMountableSizes } from "@/lib/mountableProducts";
 
 const BLANK = { name: "", sku: "", category_id: "", subcategory_id: "", color: "", brand: "", shelf: "", cost: 0, price: 0, commission: 1, sizes: [], stock_min: 0, linked_ids: [], photo: "", photo_url: "" };
 
@@ -146,7 +147,7 @@ function MontarDialog({ product, onClose, onDone, byId }) {
     && Number.isInteger(qty)
     && selectedSize
     && components.length === product.linked_ids.length
-    && components.every((component) => Number(component.sizes.find((item) => item.size === size)?.stock || 0) >= qty),
+    && getMountableQuantity(product, size, byId) >= qty,
   );
   const run = () => withSubmitLock("submit", async () => {
     try {
@@ -195,7 +196,7 @@ export default function Products() {
   const [categoryFilter, setCategoryFilter] = useState("");
   const [sortBy, setSortBy] = useState("name");
   const [sortDirection, setSortDirection] = useState("asc");
-  const [params] = useSearchParams();
+  const [params, setParams] = useSearchParams();
   const { run: withSubmitLock, isPending } = useSubmitLock();
 
   const load = async () => {
@@ -216,6 +217,8 @@ export default function Products() {
   }, [params]);
 
   const byId = useMemo(() => Object.fromEntries(products.map((p) => [p.id, p])), [products]);
+  const showMountable = params.get("montaveis") === "1";
+  const mountableProducts = products.filter((product) => getMountableSizes(product, byId).length > 0);
   const catName = (id) => categories.find((c) => c.id === id)?.name || "-";
   const parentsOf = (id) => products.filter((p) => (p.linked_ids || []).includes(id));
   const topCats = categories.filter((c) => !c.parent_id);
@@ -244,11 +247,17 @@ export default function Products() {
   const onPhoto = (f) => { if (!f) return; const r = new FileReader(); r.onload = () => setEditing((e) => ({ ...e, photo: r.result, photo_url: "" })); r.readAsDataURL(f); };
   const setSize = (i, patch) => setEditing((e) => { const sz = [...e.sizes]; sz[i] = { ...sz[i], ...patch }; return { ...e, sizes: sz }; });
   const addSize = (size = "") => setEditing((e) => (e.sizes.some((s) => s.size === size && size) ? e : { ...e, sizes: [...e.sizes, { size, stock: 0, stock_min: Number(e.stock_min || 0) }] }));
+  const toggleMountableFilter = () => {
+    const nextParams = new URLSearchParams(params);
+    if (showMountable) nextParams.delete("montaveis");
+    else nextParams.set("montaveis", "1");
+    setParams(nextParams);
+  };
 
   const filtered = products.filter((p) => {
     const matchesCategory = !categoryFilter || p.category_id === categoryFilter || p.subcategory_id === categoryFilter;
     const matchesSearch = !search || (p.name + p.sku + catName(p.category_id) + catName(p.subcategory_id) + (p.color || "")).toLowerCase().includes(search.toLowerCase());
-    return matchesCategory && matchesSearch;
+    return matchesCategory && matchesSearch && (!showMountable || getMountableSizes(p, byId).length > 0);
   }).sort((first, second) => {
     const totalStock = (product) => (product.sizes || []).reduce((sum, item) => sum + Number(item.stock || 0), 0);
     const firstValue = sortBy === "category" ? catName(first.category_id)
@@ -308,8 +317,17 @@ export default function Products() {
         >
           {sortDirection === "asc" ? "A → Z" : "Z → A"}
         </button>
+        <button
+          type="button"
+          className={`lm-btn ${showMountable ? "lm-btn-olive" : "lm-btn-outline"}`}
+          onClick={toggleMountableFilter}
+          data-testid="filter-mountable-products"
+        >
+          {showMountable ? "Mostrar todos os produtos" : `Montagens disponíveis (${mountableProducts.length})`}
+        </button>
       </div>
 
+      {showMountable && <p className="mb-3 text-sm text-neutral-600">Mostrando produtos que podem ser montados com o estoque atual dos componentes.</p>}
       <div className="lm-table-wrap overflow-x-auto">
         <table className="lm-table">
           <thead><tr><th></th><th>Produto</th><th>Categoria</th><th>Estoque por tamanho</th><th>Total</th><th>Custo</th><th>Venda</th><th>Comissão</th><th>Prat.</th><th></th></tr></thead>
@@ -325,6 +343,9 @@ export default function Products() {
                     <div className="font-head font-semibold text-[15px]">{p.name}</div>
                     <div className="text-xs text-neutral-500">{[p.sku, categories.find((c) => c.id === p.subcategory_id)?.name, p.color, p.brand].filter(Boolean).join(" · ")}</div>
                     {(p.linked_ids || []).length > 0 && <div className="text-[11px] text-[#4B5320] font-semibold mt-0.5">↳ Monta com: {p.linked_ids.map((id) => byId[id]?.name).filter(Boolean).join(" + ")}</div>}
+                    {showMountable && <div className="text-[11px] text-[#4B5320] font-semibold mt-0.5" data-testid={`mount-availability-${p.sku}`}>
+                      Disponível para montar: {getMountableSizes(p, byId).map(({ size, quantity }) => `${size} (até ${quantity})`).join(", ")}
+                    </div>}
                     {parents.length > 0 && <div className="text-[11px] text-[#9c7209] font-semibold mt-0.5">↳ Vinculado a: {parents.map((x) => x.name).join(", ")}</div>}
                   </td>
                   <td>{catName(p.category_id)}</td>
@@ -345,7 +366,7 @@ export default function Products() {
                 </tr>
               );
             })}
-            {filtered.length === 0 && <tr><td colSpan={9} className="text-center text-neutral-500 py-8">Nenhum produto cadastrado.</td></tr>}
+            {filtered.length === 0 && <tr><td colSpan={10} className="text-center text-neutral-500 py-8">{showMountable ? "Nenhum produto pode ser montado com o estoque atual." : "Nenhum produto cadastrado."}</td></tr>}
           </tbody>
         </table>
       </div>
