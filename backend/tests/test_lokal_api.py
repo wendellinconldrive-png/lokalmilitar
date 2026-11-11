@@ -1721,6 +1721,40 @@ def test_dashboard_event_flow(admin):
     finally:
         admin.delete(f"{BASE_URL}/api/dashboard/events/{event['id']}")
 
+def test_dashboard_pending_can_be_archived_for_current_account(admin):
+    response = admin.post(
+        f"{BASE_URL}/api/dashboard/events",
+        json={
+            "title": f"TEST_Pendencia_{uuid.uuid4().hex[:6]}",
+            "description": "Confirmação de arquivamento",
+            "event_date": "2030-01-02",
+        },
+    )
+    assert response.status_code == 200, response.text
+    event = response.json()
+    try:
+        pending_id = f"event:{event['id']}"
+        pending = admin.get(f"{BASE_URL}/api/dashboard/pending")
+        assert pending.status_code == 200, pending.text
+        assert pending_id in {item["id"] for item in pending.json()["items"]}
+
+        archived = admin.post(
+            f"{BASE_URL}/api/dashboard/pending/{pending_id}/archive"
+        )
+        assert archived.status_code == 200, archived.text
+        assert archived.json() == {"archived": True}
+
+        remaining = admin.get(f"{BASE_URL}/api/dashboard/pending")
+        assert remaining.status_code == 200, remaining.text
+        assert pending_id not in {item["id"] for item in remaining.json()["items"]}
+
+        repeated_archive = admin.post(
+            f"{BASE_URL}/api/dashboard/pending/{pending_id}/archive"
+        )
+        assert repeated_archive.status_code == 200, repeated_archive.text
+    finally:
+        admin.delete(f"{BASE_URL}/api/dashboard/events/{event['id']}")
+
 
 def test_day_close_is_saved_and_idempotent(admin):
     product = _prod(admin, "TEST_Fechamento_Estoque", [{"size": "U", "stock": 100}])

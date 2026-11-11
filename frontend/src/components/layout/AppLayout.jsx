@@ -8,7 +8,7 @@ import { toast } from "sonner";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
   LayoutDashboard, Package, Boxes, ShoppingCart, Repeat, Users, Tag, Truck,
-  Wrench, Fuel, DollarSign, Settings, LogOut, Menu, X, Car, Bell, BellRing
+  Wrench, Fuel, DollarSign, Settings, LogOut, Menu, X, Car, Bell, BellRing, Check
 } from "lucide-react";
 
 const items = [
@@ -37,6 +37,7 @@ export default function AppLayout() {
   const [pushActivating, setPushActivating] = useState(false);
   const [pendingDialogOpen, setPendingDialogOpen] = useState(false);
   const [pendingItems, setPendingItems] = useState([]);
+  const [archivingPendingId, setArchivingPendingId] = useState("");
   const pendingPopupUser = useRef("");
 
   useEffect(() => {
@@ -68,6 +69,22 @@ export default function AppLayout() {
       });
     return () => { cancelled = true; };
   }, [user?.id]);
+
+  const archivePendingItem = async (item) => {
+    if (!window.confirm(`Confirmar que "${item.title}" foi realizado e arquivar esta pendência na sua conta?`)) return;
+    setArchivingPendingId(item.id);
+    try {
+      await api.post(`/dashboard/pending/${encodeURIComponent(item.id)}/archive`);
+      setPendingItems((current) => current.filter((pending) => pending.id !== item.id));
+      toast.success("Pendência confirmada e arquivada");
+      if (pendingItems.length === 1) setPendingDialogOpen(false);
+    } catch (archiveError) {
+      console.error("Não foi possível arquivar a pendência.", archiveError);
+      toast.error(archiveError.response?.data?.detail || "Não foi possível arquivar a pendência");
+    } finally {
+      setArchivingPendingId("");
+    }
+  };
 
   const enableCloseNotifications = async () => {
     if (!("Notification" in window)) {
@@ -203,33 +220,49 @@ export default function AppLayout() {
         <DialogContent className="max-h-[85vh] overflow-y-auto" data-testid="pending-items-dialog">
           <DialogHeader>
             <DialogTitle className="font-head">Pendências do sistema</DialogTitle>
-            <DialogDescription>Confira anotações, pedidos em aberto, manutenções programadas e produtos que podem ser montados.</DialogDescription>
+            <DialogDescription>
+              Confira anotações, pedidos em aberto, manutenções programadas e produtos que podem ser montados.
+              Ao confirmar e arquivar, a pendência deixa de aparecer na sua conta; o registro original não é alterado.
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-2">
             {pendingItems.map((item) => (
-              <button
-                type="button"
-                key={item.id}
-                className="w-full border p-3 text-left hover:bg-neutral-100"
-                onClick={() => {
-                  setPendingDialogOpen(false);
-                  navigate(item.url || "/");
-                }}
-                data-testid={`pending-item-${item.type}`}
-              >
-                <span className="block text-xs uppercase text-neutral-500">
-                  {item.type === "anotacao"
-                    ? "Anotação"
-                    : item.type === "pedido"
-                      ? "Pedido"
-                      : item.type === "montagem"
-                        ? "Montagem disponível"
-                        : "Manutenção"}
-                  {item.date ? ` · ${new Date(`${item.date}T00:00:00`).toLocaleDateString("pt-BR")}` : ""}
-                </span>
-                <span className="block font-semibold">{item.title}</span>
-                {item.body && <span className="block text-sm text-neutral-600">{item.body}</span>}
-              </button>
+              <div key={item.id} className="border p-3">
+                <button
+                  type="button"
+                  className="w-full text-left hover:bg-neutral-100"
+                  onClick={() => {
+                    setPendingDialogOpen(false);
+                    navigate(item.url || "/");
+                  }}
+                  data-testid={`pending-item-${item.type}`}
+                >
+                  <span className="block text-xs uppercase text-neutral-500">
+                    {item.type === "anotacao"
+                      ? "Anotação"
+                      : item.type === "pedido"
+                        ? "Pedido"
+                        : item.type === "montagem"
+                          ? "Montagem disponível"
+                          : "Manutenção"}
+                    {item.date ? ` · ${new Date(`${item.date}T00:00:00`).toLocaleDateString("pt-BR")}` : ""}
+                  </span>
+                  <span className="block font-semibold">{item.title}</span>
+                  {item.body && <span className="block text-sm text-neutral-600">{item.body}</span>}
+                </button>
+                <div className="mt-2 flex justify-end">
+                  <button
+                    type="button"
+                    className="lm-btn lm-btn-olive"
+                    onClick={() => archivePendingItem(item)}
+                    disabled={Boolean(archivingPendingId)}
+                    data-testid={`archive-pending-${item.type}`}
+                  >
+                    <Check size={14} />
+                    {archivingPendingId === item.id ? "Arquivando..." : "Confirmar e arquivar"}
+                  </button>
+                </div>
+              </div>
             ))}
           </div>
           <DialogFooter>

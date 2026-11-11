@@ -74,7 +74,7 @@ RESET_GROUPS = {
     "expenses": "Despesas, insumos, viagens e manutenções",
     "vendors": "Vendedores",
     "day_closures": "Relatórios de fechamento do dia",
-    "dashboard_events": "Eventos do quadro de avisos",
+    "dashboard_events": "Anotações do painel e pendências arquivadas",
 }
 
 # ---------- DB ----------
@@ -2796,7 +2796,33 @@ async def dashboard_pending(user: dict = Depends(get_current_user)):
                 "url": "/produtos",
             })
     items.sort(key=lambda item: (item["date"] or "9999-12-31", item["type"], item["title"]))
+    item_ids = [item["id"] for item in items]
+    archived_items = await db.dashboard_pending_archives.find(
+        {"user_id": user["id"], "item_id": {"$in": item_ids}},
+        {"_id": 0, "item_id": 1},
+    ).to_list(len(item_ids)) if item_ids else []
+    archived_ids = {item["item_id"] for item in archived_items}
+    items = [item for item in items if item["id"] not in archived_ids]
     return {"items": items}
+
+@api.post("/dashboard/pending/{pending_id}/archive")
+async def archive_dashboard_pending(
+    pending_id: str,
+    user: dict = Depends(get_current_user),
+):
+    if not pending_id.startswith(("event:", "order:", "maintenance:", "assembly:")):
+        raise HTTPException(400, "Pendência inválida")
+    archive_id = hashlib.sha256(f"{user['id']}:{pending_id}".encode()).hexdigest()
+    await db.dashboard_pending_archives.update_one(
+        {"_id": archive_id},
+        {"$setOnInsert": {
+            "user_id": user["id"],
+            "item_id": pending_id,
+            "archived_at": now_iso(),
+        }},
+        upsert=True,
+    )
+    return {"archived": True}
 
 async def _delete_count(collection_name: str, query: Optional[dict] = None) -> int:
     result = await db[collection_name].delete_many(query or {})
@@ -2822,6 +2848,7 @@ async def _data_reset_counts() -> dict:
         "vendors": await db.vendors.count_documents({}),
         "day_closures": await db.day_closures.count_documents({}),
         "dashboard_events": await db.dashboard_events.count_documents({}),
+        "dashboard_pending_archives": await db.dashboard_pending_archives.count_documents({}),
         "order_ids": order_ids,
     }
 
@@ -2843,7 +2870,11 @@ async def data_reset_options(user: dict = Depends(require_admin)):
             {"id": "expenses", "label": RESET_GROUPS["expenses"], "count": counts["expenses"]},
             {"id": "vendors", "label": RESET_GROUPS["vendors"], "count": counts["vendors"]},
             {"id": "day_closures", "label": RESET_GROUPS["day_closures"], "count": counts["day_closures"]},
-            {"id": "dashboard_events", "label": RESET_GROUPS["dashboard_events"], "count": counts["dashboard_events"]},
+            {
+                "id": "dashboard_events",
+                "label": RESET_GROUPS["dashboard_events"],
+                "count": counts["dashboard_events"] + counts["dashboard_pending_archives"],
+            },
         ],
     }
 
@@ -2884,6 +2915,8 @@ async def reset_data(payload: DataResetInput, user: dict = Depends(require_admin
         if group in selected:
             if group == "vendors":
                 await db.users.update_many({"vendor_id": {"$exists": True}}, {"$set": {"vendor_id": None}})
+            if group == "dashboard_events":
+                deleted["dashboard_pending_archives"] = await _delete_count("dashboard_pending_archives")
             deleted[collection] = await _delete_count(collection)
 
     if "expenses" in selected:
