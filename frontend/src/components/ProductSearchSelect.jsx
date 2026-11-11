@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Search } from "lucide-react";
 import { focusNextField } from "@/lib/keyboardNavigation";
 
@@ -23,6 +23,10 @@ export default function ProductSearchSelect({
       search && `${product.name || ""} ${product.sku || ""}`.toLocaleLowerCase().includes(search)
     )).slice(0, 100);
   }, [canShowOptions, products, query]);
+  useEffect(() => {
+    if (!focused || !canShowOptions || !options[activeIndex]) return;
+    document.getElementById(`${testid || "product-search"}-option-${options[activeIndex].id}`)?.scrollIntoView?.({ block: "nearest" });
+  }, [activeIndex, canShowOptions, focused, options, testid]);
   const selectOption = (product, advance = false, input) => {
     onChange(product.id);
     setQuery("");
@@ -82,6 +86,7 @@ export default function ProductSearchSelect({
               type="button"
               role="option"
               aria-selected={product.id === value}
+              data-active-option={activeIndex === index}
               className={`block w-full border-b px-3 py-2 text-left text-sm last:border-0 hover:bg-[var(--selection-blue)] hover:text-white ${activeIndex === index ? "text-white" : ""}`}
               style={{ backgroundColor: activeIndex === index ? "var(--selection-blue)" : undefined }}
               onMouseDown={(event) => event.preventDefault()}

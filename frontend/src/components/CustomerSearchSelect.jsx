@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Search } from "lucide-react";
 import { focusNextField } from "@/lib/keyboardNavigation";
 
@@ -26,6 +26,10 @@ export default function CustomerSearchSelect({
       ].some((field) => String(field || "").toLocaleLowerCase().includes(search))
     )).slice(0, 100);
   }, [canShowOptions, customers, query]);
+  useEffect(() => {
+    if (!focused || !canShowOptions || !options[activeIndex]) return;
+    document.getElementById(`${testid || "customer-search"}-option-${options[activeIndex].id}`)?.scrollIntoView?.({ block: "nearest" });
+  }, [activeIndex, canShowOptions, focused, options, testid]);
 
   const selectCustomer = (customer, advance = false, input) => {
     onChange(customer.id);
@@ -85,6 +89,7 @@ export default function CustomerSearchSelect({
               role="option"
               aria-selected={customer.id === value}
               id={`${testid || "customer-search"}-option-${customer.id}`}
+              data-active-option={activeIndex === index}
               className={`block w-full border-b px-3 py-2 text-left text-sm last:border-0 hover:bg-[var(--selection-blue)] hover:text-white ${activeIndex === index ? "text-white" : ""}`}
               style={{ backgroundColor: activeIndex === index ? "var(--selection-blue)" : undefined }}
               onMouseDown={(event) => event.preventDefault()}
