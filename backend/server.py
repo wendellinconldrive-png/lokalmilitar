@@ -63,7 +63,7 @@ from google_calendar import (
 
 FUEL_TYPES = ("Gasolina", "Etanol", "Diesel", "GNV")
 DEFAULT_FUEL_PRICES = {fuel_type: 0 for fuel_type in FUEL_TYPES}
-DEFAULT_DEPOT_ADDRESS = "RUA SALUSTIANO SILVA 550, CEP 21745590"
+DEFAULT_DEPOT_ADDRESS = "RUA SALUSTIANO SILVA 550, LOJA H, CEP 21745590"
 LEGACY_DEFAULT_DEPOT_ADDRESS = "Rua Salustiano Silva, Nº 550, H - 21745590 - Rio de Janeiro, RJ"
 RESET_GROUPS = {
     "orders": "Pedidos, comissões e registros vinculados",
@@ -1176,6 +1176,9 @@ def _build_destination_geocoding_address(address: str, cep: str) -> str:
     address_without_cep = re.sub(r"\s*,\s*", ", ", address_without_cep).strip(" ,")
     return ", ".join(part for part in (address_without_cep, f"CEP {cep}", "Brasil") if part)
 
+def _build_depot_geocoding_address() -> str:
+    return f"{DEFAULT_DEPOT_ADDRESS}, Rio de Janeiro, RJ, Brasil"
+
 async def _geocode_for_distance(address: str, description: str):
     try:
         return await asyncio.to_thread(_geocode_address, address)
@@ -1219,7 +1222,7 @@ async def calculate_customer_distance(payload: CustomerDistanceInput, user: dict
         raise HTTPException(400, "Informe um CEP válido com 8 dígitos")
     destination_address = _build_destination_geocoding_address(payload.address, cep)
     origin, destination = await asyncio.gather(
-        _geocode_for_distance("Rua Salustiano Silva, 550, Rio de Janeiro, RJ, Brasil", "o endereço do depósito"),
+        _geocode_for_distance(_build_depot_geocoding_address(), "o endereço do depósito"),
         _geocode_for_distance(destination_address, "o endereço informado"),
     )
     coordinates = f"{origin[1]},{origin[0]};{destination[1]},{destination[0]}"

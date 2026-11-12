@@ -13,10 +13,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from server import (  # noqa: E402
     HTTPException,
     _build_destination_geocoding_address,
+    _build_depot_geocoding_address,
     _geocode_for_distance,
     _prepare_trip,
     mark_order_whatsapp_shared,
 )
+
+def test_depot_geocoding_query_includes_valid_cep():
+    assert _build_depot_geocoding_address() == (
+        "RUA SALUSTIANO SILVA 550, LOJA H, CEP 21745590, Rio de Janeiro, RJ, Brasil"
+    )
 
 
 def test_destination_geocoding_query_does_not_duplicate_formatted_cep():

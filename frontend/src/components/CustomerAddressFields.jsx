@@ -147,7 +147,7 @@ export default function CustomerAddressFields({ editing, setEditing }) {
         />
       </div>
       <p className="text-[11px] text-neutral-500">
-        Depósito: RUA SALUSTIANO SILVA 550, CEP 21745590. A distância é calculada pela rota de carro após informar o número.
+        Depósito: RUA SALUSTIANO SILVA 550, LOJA H, CEP 21745590. A distância é calculada pela rota de carro após informar o número.
         {calculating ? " Calculando..." : " Rota: OSRM / OpenStreetMap."}
       </p>
     </div>
